@@ -12,7 +12,7 @@ Recommended hardware mods:
   R4 = 100R
   R12 = 47K + trimmer 5K (series)
 
-# GMSN Pure Quantiser Calibration Utility
+## GMSN Pure Quantiser Calibration Utility
 2021-11-12
 Alessio Nuti
 
