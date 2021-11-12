@@ -4,6 +4,7 @@
 Rob Spencer cc-by 4.0
 
 Version 2021-11-12 Alessio Nuti
+
 Release Notes:
 - envelope now returns exactly to zero after release
 - A, D, R knobs are now linear with time and ranges are adjustable
