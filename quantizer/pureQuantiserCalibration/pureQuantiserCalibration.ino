@@ -65,9 +65,6 @@ const byte CS_DAC = 10;
 const byte TRIG = 8;
 int cvIn;
 int cvOut;
-int lastCvOut;
-unsigned long lastCvChangeTime;
-int triggerOnTime = 10;
 
 void setup() {
     //Setup LED Pins
@@ -415,22 +412,3 @@ int adcRead(byte channel) {
     return (b1 >> 3);     // To have a 12bit answer (see datasheet)
 }
 
-int float2int(float f) {
-    int n = 0;
-    if (f >= 0) {
-        int n = (int)(f + 0.5);
-    } else {
-        int n = (int)(f - 0.5);
-    }
-    return n;
-}
-
-void vuMeter(int cv) {
-    for (int l = 0; l < 12; l++) {
-        if (cv > (340 * (l + 1))) {
-            writeLED(11 - l);
-        } else {
-            writeLED(-1);
-        }
-    }
-}

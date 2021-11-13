@@ -7,11 +7,20 @@ Version 2021-11-12 Alessio Nuti
 
 Release Notes:
 
-Recommended hardware mods:
+### Hardware mods (range 0V -> 10V):
   R19, R20, R21 = 220R
   R3 = 4K7
   R4 = 100R
-  R12 = 47K + trimmer 5K (series)
+  R12 = 100K
+  R10 = 47K
+  Calibration:
+  - Output 4095 DAC
+  - Calibrate output to full scale (10V) using TR1
+  - Bypass mode
+  - Input 5V and measure output
+  - Calculate ADC_FS = 2*output/5 and put the value into code
+
+
 
 ## GMSN Pure Quantiser Calibration Utility
 2021-11-12
@@ -35,7 +44,3 @@ Features:
 - C active -> DAC output 4095
 - F active -> DAC output 2048
 - B active -> DAC output 0
-
-
-
-

@@ -6,8 +6,6 @@ Rob Spencer cc-by 4.0
 Version 2021-11-12 Alessio Nuti
 Release Notes:
 
-
-
 */
 
 #include <EEPROM.h>
@@ -18,8 +16,8 @@ Release Notes:
 const byte RANGE = 5;          // total range in octaves
 const boolean BIPOLAR = true;  // if true input and output cv is from -RANGE/2 to +RANGE/2 volts
                                // if false input and output cv is from 0 to +RANGE volts
-
-const float octVal = 4095.0 / RANGE;
+const float ADC_FS = 4000;
+const float octVal = ADC_FS / RANGE;
 const float noteVal = octVal / 12.0;
 
 //Setup LED Pin Variables
@@ -157,7 +155,7 @@ void loop() {
         vuMeter(cvOut);
     } else {
         //If not in mode=0, Quantise CV
-        quantiseCV(cvIn);
+        cvOut = quantiseCV(cvIn);
 
         //CV Out has changed, i.e. we've changed notes, then set the trigger out high.
         if (lastCvOut != cvOut) {
@@ -168,7 +166,6 @@ void loop() {
             digitalWrite(TRIG, LOW);
         }
     }
-
     dacWrite(cvOut);
 }
 
@@ -397,87 +394,85 @@ int adcRead(byte channel) {
     return (b1 >> 3);     // To have a 12bit answer (see datasheet)
 }
 
-// int quantiseCV(int cvIn) {
-//     int octave = cvIn / 819;
-//     int vOct = octave * 819;
-//     int vOffset = 0;
+int quantiseCV(int cvInput) {
+    int octave = floor(cvInput / octVal);
+    float noteFloat = (cvInput / octVal - octave) / noteVal;
+    int note = round(noteFloat);  // valore da 0 a 11
 
-//     for (int index = 1; index <= 12; index++) {
-//         if (notes[index] == 1 && (cvIn - vOct) > index * 63) {
-//             vOffset = (index * 63) - 63;
-//             cvOut = vOct + vOffset;
-//         }
+    int sign = 1;
+    if (noteFloat < note) {
+        sign = -1;
+    }
+
+    float cvOutput = 0;
+    for (int n = 0; n < 12; n++) {
+        if (notes[(note + sign * n) % 11]) {
+            cvOutput = octave * octVal + (note + n) * noteVal;
+            break;
+        }
+        if (notes[(note - sign * n) % 11]) {
+            cvOutput = octave * octVal + (note - n) * noteVal;
+            break;
+        }
+    }
+    return round(cvOutput);
+
+    //     float vOffset_sup = 0;
+    //     int index_sup = 0;
+    //     float vOffset_inf = 0;
+    //     int index_inf = 0;
+    //     for (int index = 1; index < 13; index++) {
+    //         if (note + index < 12) {
+    //             if (notes[note + index]) {
+    //                 vOffset_sup = (note + index) * noteVal;
+    //                 index_sup = index;
+    //                 break;
+    //             }
+    //         } else {
+    //             if (notes[note + index - 12]) {
+    //                 vOffset_sup = (note + index) * noteVal;
+    //                 index_sup = index;
+    //                 break;
+    //             }
+    //         }
+    //     }
+    //     for (int index = 1; index < 13; index++) {
+    //         if (note - index >= 0) {
+    //             if (notes[note - index]) {
+    //                 vOffset_inf = (note - index) * noteVal;
+    //                 index_inf = index;
+    //                 break;
+    //             }
+    //         } else {
+    //             if (notes[note - index + 12]) {
+    //                 vOffset_inf = (note - index) * noteVal;
+    //                 index_inf = index;
+    //                 break;
+    //             }
+    //         }
+    //     }
+    //     if (index_sup < index_inf) {
+    //         vOffset = vOffset_sup;
+    //     } else {
+    //         vOffset = vOffset_inf;
+    //     }
+    // }
+    // int cvOut = octaveFloat * octVal + vOffset;
+}
+
+// int float2int(float f) {
+//     int n = 0;
+//     if (f >= 0) {
+//         int n = (int)(f + 0.5);
+//     } else {
+//         int n = (int)(f - 0.5);
 //     }
+//     return n;
 // }
-
-int quantiseCV(int cvIn) {
-
-    int cvInCorr = cvIn - noteVal/2;
-    int vOct = octVal * (cvInCorr / octVal);
-    int vOffset = 0;
-    int note = (cvInCorr % octVal) / noteVal;   // valore da 0 a 11
-
-    if (notes[note]) {
-        vOffset = (note) * noteVal;
-    } else {  // decl
-        float vOffset_sup = 0;
-        int index_sup = 0;
-        float vOffset_inf = 0;
-        int index_inf = 0;
-
-        for (int index = 1; index < 13; index++) {
-            if (note + index < 12) {
-                if (notes[note + index]) {
-                    vOffset_sup = (note + index) * noteVal;
-                    index_sup = index;
-                    break;
-                }
-            } else {
-                if (notes[note + index - 12]) {
-                    vOffset_sup = (note + index) * noteVal;
-                    index_sup = index;
-                    break;
-                }
-            }
-        }
-        for (int index = 1; index < 13; index++) {
-            if (note - index >= 0) {
-                if (notes[note - index]) {
-                    vOffset_inf = (note - index) * noteVal;
-                    index_inf = index;
-                    break;
-                }
-            } else {
-                if (notes[note - index + 12]) {
-                    vOffset_inf = (note - index) * noteVal;
-                    index_inf = index;
-                    break;
-                }
-            }
-        }
-        if (index_sup < index_inf) {
-            vOffset = vOffset_sup;
-        } else {
-            vOffset = vOffset_inf;
-        }
-    }
-    int cvOut = vOct + vOffset;
-    return cvOut;
-}
-
-int float2int(float f) {
-    int n = 0;
-    if (f >= 0) {
-        int n = (int)(f + 0.5);
-    } else {
-        int n = (int)(f - 0.5);
-    }
-    return n;
-}
 
 void vuMeter(int cv) {
     for (int l = 0; l < 12; l++) {
-        if (cv > (340 * (l + 1))) {
+        if (cv > (ADC_FS/13 * (l + 1))) {
             writeLED(11 - l);
         } else {
             writeLED(-1);
