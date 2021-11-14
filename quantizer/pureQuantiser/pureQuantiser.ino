@@ -13,11 +13,11 @@ Release Notes:
 #include "SPI.h"
 
 //Global parameters
-const byte RANGE = 5;          // total range in octaves
-const boolean BIPOLAR = true;  // if true input and output cv is from -RANGE/2 to +RANGE/2 volts
-                               // if false input and output cv is from 0 to +RANGE volts
-const float ADC_FS = 4000;
-const float octVal = ADC_FS / RANGE;
+const byte RANGE = 10;          // total range in octaves
+const boolean BIPOLAR = false;  // if true input and output cv is from -RANGE/2 to +RANGE/2 volts
+                                // if false input and output cv is from 0 to +RANGE volts
+const float ADC_FS = 4095 * 1.0403;
+const float octVal = 4095.0 / RANGE;
 const float noteVal = octVal / 12.0;
 
 //Setup LED Pin Variables
@@ -55,7 +55,7 @@ const byte CS_DAC = 10;
 
 //Setup CV and Trigger Pin Variables
 const byte TRIG = 8;
-int cvIn;
+float cvIn;
 int cvOut;
 int lastCvOut;
 unsigned long lastCvChangeTime;
@@ -141,7 +141,7 @@ void loop() {
     //2) CV Management
 
     //Read CV In
-    cvIn = adcRead(0);
+    cvIn = adcRead(0) * 4095.0 / ADC_FS;
 
     //Check all the note flags and if none are set, we're not quantising, mode=0
     mode = 0;
@@ -151,14 +151,14 @@ void loop() {
 
     //If mode=0, just output the input and flash the leds like a VU Meter.
     if (mode == 0) {
-        cvOut = cvIn;
+        cvOut = round(cvIn);
         vuMeter(cvOut);
     } else {
         //If not in mode=0, Quantise CV
-        cvOut = quantiseCV(cvIn);
+        cvOut = round(quantiseCV(cvIn));
 
         //CV Out has changed, i.e. we've changed notes, then set the trigger out high.
-        if (lastCvOut != cvOut) {
+        if (abs(lastCvOut - cvOut) < noteVal / 2) {
             digitalWrite(TRIG, HIGH);
             lastCvOut = cvOut;
             lastCvChangeTime = millis();
@@ -167,6 +167,67 @@ void loop() {
         }
     }
     dacWrite(cvOut);
+}
+
+void dacWrite(int value) {
+    digitalWrite(CS_DAC, LOW);
+    byte data = value >> 8;
+    data = data & B00001111;
+    data = data | B00110000;
+    SPI.transfer(data);
+
+    data = value;
+    SPI.transfer(data);
+
+    digitalWrite(CS_DAC, HIGH);
+}
+
+int adcRead(byte channel) {
+    byte commandbits = B00001101;  //command bits - 0000, start, mode, chn, MSBF
+    unsigned int b1 = 0;           // get the return var's ready
+    unsigned int b2 = 0;
+    commandbits |= (channel << 1);  // update the command bit to select either ch 1 or 2
+    digitalWrite(CS_ADC, LOW);
+    SPI.transfer(commandbits);        // send out the command bits
+    const int hi = SPI.transfer(b1);  // read back the result high byte
+    const int lo = SPI.transfer(b2);  // then the low byte
+    digitalWrite(CS_ADC, HIGH);
+    b1 = lo + (hi << 8);  // assemble the two bytes into a word
+    return (b1 >> 3);     // To have a 12bit answer (see datasheet)
+}
+
+float quantiseCV(int cvInput) {
+    int octave = floor(cvInput / octVal);
+    float noteFloat = (cvInput - octVal * octave) / noteVal;
+    int note = round(noteFloat);  // valore da 0 a 11
+
+    int sign = 1;
+    if (noteFloat < note) {
+        sign = -1;
+    }
+
+    float cvOutput = 0;
+    for (int i = 0; i < 12; i++) {
+        cvOutput = octave * octVal + (note + sign * i) * noteVal;
+        if (cvOutput >= 0 && cvOutput <= 4095 && notes[(note + sign * i + 12) % 12]) {
+            break;
+        }
+        cvOutput = octave * octVal + (note - sign * i) * noteVal;
+        if (cvOutput >= 0 && cvOutput <= 4095 && notes[(note - sign * i + 12) % 12]) {
+            break;
+        }
+    }
+    return cvOutput;
+}
+
+void vuMeter(int cv) {
+    for (int l = 0; l < 12; l++) {
+        if (cv > (4095.0 / 13 * (l + 1))) {
+            writeLED(11 - l);
+        } else {
+            writeLED(-1);
+        }
+    }
 }
 
 void readNoteButton(int button) {
@@ -365,117 +426,4 @@ void writeLED(int LED) {
             break;
     }
     delay(1);
-}
-
-void dacWrite(int value) {
-    digitalWrite(CS_DAC, LOW);
-    byte data = value >> 8;
-    data = data & B00001111;
-    data = data | B00110000;
-    SPI.transfer(data);
-
-    data = value;
-    SPI.transfer(data);
-
-    digitalWrite(CS_DAC, HIGH);
-}
-
-int adcRead(byte channel) {
-    byte commandbits = B00001101;  //command bits - 0000, start, mode, chn, MSBF
-    unsigned int b1 = 0;           // get the return var's ready
-    unsigned int b2 = 0;
-    commandbits |= (channel << 1);  // update the command bit to select either ch 1 or 2
-    digitalWrite(CS_ADC, LOW);
-    SPI.transfer(commandbits);        // send out the command bits
-    const int hi = SPI.transfer(b1);  // read back the result high byte
-    const int lo = SPI.transfer(b2);  // then the low byte
-    digitalWrite(CS_ADC, HIGH);
-    b1 = lo + (hi << 8);  // assemble the two bytes into a word
-    return (b1 >> 3);     // To have a 12bit answer (see datasheet)
-}
-
-int quantiseCV(int cvInput) {
-    int octave = floor(cvInput / octVal);
-    float noteFloat = (cvInput / octVal - octave) / noteVal;
-    int note = round(noteFloat);  // valore da 0 a 11
-
-    int sign = 1;
-    if (noteFloat < note) {
-        sign = -1;
-    }
-
-    float cvOutput = 0;
-    for (int n = 0; n < 12; n++) {
-        if (notes[(note + sign * n) % 11]) {
-            cvOutput = octave * octVal + (note + n) * noteVal;
-            break;
-        }
-        if (notes[(note - sign * n) % 11]) {
-            cvOutput = octave * octVal + (note - n) * noteVal;
-            break;
-        }
-    }
-    return round(cvOutput);
-
-    //     float vOffset_sup = 0;
-    //     int index_sup = 0;
-    //     float vOffset_inf = 0;
-    //     int index_inf = 0;
-    //     for (int index = 1; index < 13; index++) {
-    //         if (note + index < 12) {
-    //             if (notes[note + index]) {
-    //                 vOffset_sup = (note + index) * noteVal;
-    //                 index_sup = index;
-    //                 break;
-    //             }
-    //         } else {
-    //             if (notes[note + index - 12]) {
-    //                 vOffset_sup = (note + index) * noteVal;
-    //                 index_sup = index;
-    //                 break;
-    //             }
-    //         }
-    //     }
-    //     for (int index = 1; index < 13; index++) {
-    //         if (note - index >= 0) {
-    //             if (notes[note - index]) {
-    //                 vOffset_inf = (note - index) * noteVal;
-    //                 index_inf = index;
-    //                 break;
-    //             }
-    //         } else {
-    //             if (notes[note - index + 12]) {
-    //                 vOffset_inf = (note - index) * noteVal;
-    //                 index_inf = index;
-    //                 break;
-    //             }
-    //         }
-    //     }
-    //     if (index_sup < index_inf) {
-    //         vOffset = vOffset_sup;
-    //     } else {
-    //         vOffset = vOffset_inf;
-    //     }
-    // }
-    // int cvOut = octaveFloat * octVal + vOffset;
-}
-
-// int float2int(float f) {
-//     int n = 0;
-//     if (f >= 0) {
-//         int n = (int)(f + 0.5);
-//     } else {
-//         int n = (int)(f - 0.5);
-//     }
-//     return n;
-// }
-
-void vuMeter(int cv) {
-    for (int l = 0; l < 12; l++) {
-        if (cv > (ADC_FS/13 * (l + 1))) {
-            writeLED(11 - l);
-        } else {
-            writeLED(-1);
-        }
-    }
 }
