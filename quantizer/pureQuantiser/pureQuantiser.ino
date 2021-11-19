@@ -3,8 +3,13 @@
 GMSN Pure Quantiser
 Rob Spencer cc-by 4.0
 
-Version 2021-11-12 Alessio Nuti
+Version 2021-11-19 Alessio Nuti
 Release Notes:
+- refactored and cleaned up code
+- notes, leds and buttons are numbered 0-11
+- new quantization algorithm: quantize to the nearest active note
+- adcRead returns the correct (12bit) value
+- support for ADC calibration, cvIn is scaled before processing
 
 */
 
@@ -14,9 +19,7 @@ Release Notes:
 
 //Global parameters
 const byte RANGE = 10;          // total range in octaves
-const boolean BIPOLAR = false;  // if true input and output cv is from -RANGE/2 to +RANGE/2 volts
-                                // if false input and output cv is from 0 to +RANGE volts
-const float ADC_FS = 4095 * 1.0403;
+const float ADC_FS = 4095 * 0.981; // ADC fullscale value (see readme for calibration procedures)
 const float octVal = 4095.0 / RANGE;
 const float noteVal = octVal / 12.0;
 
@@ -158,7 +161,7 @@ void loop() {
         cvOut = round(quantiseCV(cvIn));
 
         //CV Out has changed, i.e. we've changed notes, then set the trigger out high.
-        if (abs(lastCvOut - cvOut) < noteVal / 2) {
+        if (abs(lastCvOut - cvOut) > noteVal / 2) {
             digitalWrite(TRIG, HIGH);
             lastCvOut = cvOut;
             lastCvChangeTime = millis();

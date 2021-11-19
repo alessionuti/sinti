@@ -3,44 +3,40 @@
 ## GMSN Pure Quantiser Code
 Rob Spencer cc-by 4.0
 
-Version 2021-11-12 Alessio Nuti
+Version 2021-11-19 Alessio Nuti
 
-Release Notes:
+Features:
+- new quantization algorithm: quantize to the nearest active note
+- support for ADC calibration
 
-### Hardware mods (range 0V -> 10V):
+## Hardware
+### Recommended hardware mods (range 0V -> 10V):
   R19, R20, R21 = 220R
   R3 = 4K7
   R4 = 100R
   R12 = 100K
   R10 = 47K
-  Calibration:
+
+### Optional mod (range -5V -> +5V):
+  connect +5V to the first opamp input through a series of two 47K resistora and a 10K trimmer (TR2)
+  this adds +5V to the input (acceptable cv range is now -5V -> +5V)
+
+
+##  Calibration
+  - Upload the "GMSN Pure Quantiser Calibration Utility"
   - Output 4095 DAC
   - Calibrate output to full scale (10V) using TR1
-  - Bypass mode
-  - Input 5V and measure output
-  - Calculate ADC_FS = 2*output/5 and put the value into code
+  - Switch to bypass mode, output (DAC counts) = input (ADC counts)
+  - Input a known voltage V_in and measure output V_out
+  - Calculate ADC_FS = 4095 * V_out/V_in and put the value into code
 
-
-
-## GMSN Pure Quantiser Calibration Utility
-2021-11-12
-Alessio Nuti
-
+### GMSN Pure Quantiser Calibration Utility
 Features:
-1) ADC calibration mode:
-- ADC read 4095 -> LED C
-- ADC read 4094 -> LED C#
-- ADC read 4093 -> LED D
-- ADC read 2049 -> LED E
-- ADC read 2048 -> LED F
-- ADC read 2047 -> LED F#
-- ADC read 2046 -> LED G
-- ADC read 2 -> LED A
-- ADC read 1 -> LED A#
-- ADC read 0 -> LED B
+1) bypass mode:
+  - output (DAC counts) = input (ADC counts)
 
 2) DAC calibration mode:
-- press button C, F or B to enter DAC calibration mode
-- C active -> DAC output 4095
-- F active -> DAC output 2048
-- B active -> DAC output 0
+  - press button C, F or B to enter DAC calibration mode
+  - C active -> DAC output 4095
+  - F active -> DAC output 2048
+  - B active -> DAC output 0

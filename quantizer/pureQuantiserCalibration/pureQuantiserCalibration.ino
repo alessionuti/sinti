@@ -1,20 +1,11 @@
 /*
   GMSN Pure Quantiser Calibration Utility
-  2021-11-12
+  2021-11-15
   Alessio Nuti
 
   Features:
-  1) ADC calibration mode:
-    - ADC read 4095 -> LED C
-    - ADC read 4094 -> LED C#
-    - ADC read 4093 -> LED D
-    - ADC read 2049 -> LED E
-    - ADC read 2048 -> LED F
-    - ADC read 2047 -> LED F#
-    - ADC read 2046 -> LED G
-    - ADC read 2 -> LED A
-    - ADC read 1 -> LED A#
-    - ADC read 0 -> LED B
+  1) bypass mode:
+    - output (DAC counts) = input (ADC counts)
 
   2) DAC calibration mode:
     - press button C, F or B to enter DAC calibration mode
@@ -143,29 +134,7 @@ void loop() {
 
     //If mode=0, just output the input and flash the leds like a VU Meter.
     if (mode == 0) {
-        if (cvIn == 4095) {
-            writeLED(0);
-        } else if (cvIn == 4094) {
-            writeLED(1);
-        } else if (cvIn == 4093) {
-            writeLED(2);
-        } else if (cvIn == 2049) {
-            writeLED(4);
-        } else if (cvIn == 2048) {
-            writeLED(5);
-        } else if (cvIn == 2047) {
-            writeLED(6);
-        } else if (cvIn == 2046) {
-            writeLED(7);
-        } else if (cvIn == 2) {
-            writeLED(9);
-        } else if (cvIn == 1) {
-            writeLED(10);
-        } else if (cvIn == 0) {
-            writeLED(11);
-        } else {
-            writeLED(-1);
-        }
+        writeLED(-1);
         cvOut = cvIn;
     }
 
