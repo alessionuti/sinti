@@ -10,16 +10,18 @@ Features:
 - support for ADC calibration
 
 ## Hardware
-### Recommended hardware mods (range 0V -> 10V):
-  R19, R20, R21 = 220R
-  R3 = 4K7
-  R4 = 100R
-  R12 = 100K
-  R10 = 47K
+### Recommended hardware mods (input range 0V -> 10V):
+  - R19, R20, R21 = 220R
+  - R3 = 4K7
+  - R4 = 100R
+  - R12 = 100K
+  - R10 = 47K
 
-### Optional mod (range -5V -> +5V):
-  connect +5V to the first opamp input through a series of two 47K resistora and a 10K trimmer (TR2)
+### Optional mod (input range -5V -> +5V):
+  - connect +5V to the first opamp input through a series of two 47K resistors and a 10K trimmer (TR2); 
   this adds +5V to the input (acceptable cv range is now -5V -> +5V)
+  - add a switch if you want to keep the two input range options together 
+  - note: the output CV is always 0V -> 10V; when using the -5V -> +5V option notes are transposed by 5 octaves
 
 
 ##  Calibration
@@ -36,7 +38,7 @@ Features:
   - output (DAC counts) = input (ADC counts)
 
 2) DAC calibration mode:
-  - press button C, F or B to enter DAC calibration mode
+  - press button C, F or B to enter DAC calibration mode (press again to return to bypass mode)
   - C active -> DAC output 4095
   - F active -> DAC output 2048
   - B active -> DAC output 0
