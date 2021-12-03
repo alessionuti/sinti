@@ -54,7 +54,8 @@
 #define DEBUG 0               // 0 = normal / 1 = (internal clock) / 2 = SerialDump
 #define DISPLAY_TIMEOUT 2000  // how long active channel display is shown
 
-int length = 50;  // pulse length
+#define OUT_PULSE_LENGTH 10  // ms
+#define LED_PULSE_LENGTH 30  // ms
 
 LedControl lc = LedControl(LED_LOAD, LED_CLK, LED_DIN, 1);
 boolean diga_old;  // for encoders
@@ -79,6 +80,7 @@ int oldpulse = 1;  // for trigger in
 
 boolean pulses_active = false;  // is active while a beat pulse is playing
 boolean lights_active = false;
+int led_pulse_length = LED_PULSE_LENGTH;
 
 int kknob;
 int active_channel = 0;  // which channel is active? zero indexed
@@ -227,7 +229,7 @@ void loop() {
 
     // ANALOG PULSE TRIGGER
     newpulse = digitalRead(TRIG_IN);  // Pulse input
-    if (newpulse > oldpulse) {
+    if (newpulse < oldpulse) {
         Sync();
     }
     oldpulse = newpulse;
@@ -301,27 +303,28 @@ void loop() {
     // ENABLE RESET BUTTON
     int reset_button = digitalRead(RESET_BUT);
     int reset_input = digitalRead(RESET_IN);
-    if ((reset_button == HIGH || reset_input == HIGH) && channelbeats[0][2] > 0) {
+    if ((reset_button == HIGH || reset_input == LOW) && channelbeats[0][2] > 0) {
         for (int a = 0; a < channels; a++) {
             channelbeats[a][2] = 0;
         }
     }
 
     // TURN OFF ANY LIGHTS THAT ARE ON
-    if (time - last_sync > length && lights_active == true) {
+    if (time - last_sync > led_pulse_length && lights_active == true) {
         for (int a = 0; a < channels; a++) {
             lc.setLed(0, 7, 5 - (a * 2), false);
-            lc.setLed(0, 7, 4, false);  // spare pin flash
+            lc.setLed(0, 7, 7, false);
+            // lc.setLed(0, 7, 4, false);  // spare pin flash
         }
         lights_active = false;
     }
 
-    // FINISH ANY PULSES THAT ARE ACTIVE - PULSES LAST 1/4 AS LONG AS LIGHTS
-    if (time - last_sync > (length / 4) && pulses_active == true) {
+    // FINISH ANY PULSES THAT ARE ON
+    if (time - last_sync > OUT_PULSE_LENGTH && pulses_active == true) {
         for (int a = 0; a < channels; a++) {
             digitalWrite(11 + a, LOW);
-            digitalWrite(OUT_AUX, LOW);
         }
+        digitalWrite(OUT_AUX, LOW);
         pulses_active = false;
     }
 }
@@ -445,11 +448,7 @@ unsigned int ConcatBin(unsigned int bina, unsigned int binb) {
 
 // routine triggered by each beat
 void Sync() {
-    if (masterclock % 2 == 0) {  // tick bottom left corner on and off with clock
-        lc.setLed(0, 7, 7, true);
-    } else {
-        lc.setLed(0, 7, 7, false);
-    }
+    lc.setLed(0, 7, 7, true);
 
     // Cycle through channels
     for (int a = 0; a < channels; a++) {
@@ -489,12 +488,12 @@ void Sync() {
         }
 
         // send off pulses to spare output for the first channel
-        if (bitRead(beat_holder[a], read_head) == 0 && a == 0) {  // only relates to first channel
-            digitalWrite(OUT_AUX, HIGH);                          // pulse out
-            lc.setLed(0, 7, 4, true);                             // bottom row flash
-            pulses_active = true;
-            lights_active = true;
-        }
+        // if (bitRead(beat_holder[a], read_head) == 0 && a == 0) {  // only relates to first channel
+        //     digitalWrite(OUT_AUX, HIGH);                          // pulse out
+        //     lc.setLed(0, 7, 4, true);                             // bottom row flash
+        //     pulses_active = true;
+        //     lights_active = true;
+        // }
 
         // move counter to next position, ready for next pulse
         channelbeats[a][2]++;
@@ -510,7 +509,11 @@ void Sync() {
 
     looptracker++;
 
-    length = ((time - last_sync) / 5);
+    led_pulse_length = LED_PULSE_LENGTH;
+    if ((time - last_sync) < LED_PULSE_LENGTH) {
+        led_pulse_length = ((time - last_sync) / 5);
+    }
+
     last_sync = time;
 }
 
