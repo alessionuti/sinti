@@ -27,41 +27,13 @@
  FIXED Display on beats where k=n - seems to show loads of binary 111 on the end
  FIXED  Fix the bottom row - currently output flashers reversed
 
- Display
- din = d2
- clk = d3
- load = d4
-
- Encoders
- Encoder 1a - k / beats = d5
- Encoder 1b - k / beats = d6
- Encoder 2a - n / length = d7
- Encoder 2b - n / length  = d8
- Encoder 3a - Offset = d9
- Encoder 3 b - offset = d10
-
- Pulses
- 1 = d11
- 2 = d12
- 3 = d13
-
- Switches / misc
- encoder switch = A0
- reset switch = A1
- pulse input = A2
- spare jack out = A3
-
- 10k resistor ladder around 3 push button switches
- sw1 -> 0.71V (145ADC)
- sw2 -> 1.25V (256ADC)
- sw3 -> 2.14V (438ADC)
  */
 
-#define ENC_1A 10
+#define ENC_1A 10  // k / beats
 #define ENC_1B 9
-#define ENC_2A 8
+#define ENC_2A 8  // n / length
 #define ENC_2B 7
-#define ENC_3A 6
+#define ENC_3A 6  // o / offset
 #define ENC_3B 5
 #define ENC_SWITCH A2
 #define OUT_AUX A3
@@ -70,8 +42,8 @@
 #define OUT_3 13
 #define LED_DIN 4
 #define LED_CLK 3
-#define LED_LOAD 2
-#define TRIG_IN A0
+#define LED_LOAD A0
+#define TRIG_IN 2
 #define RESET_IN A1
 #define RESET_BUT A4
 #define POT A5
@@ -79,34 +51,20 @@
 #define ENC_DEBOUNCE 50  // ms for debouncing
 
 #define BRIGHTNESS 0
-#define DEBUG 0           // 0 = normal 1 =  (internal clock) 2= SerialDump
-#define LED_REFRESH 2000  // how long active channel display is shown
+#define DEBUG 0               // 0 = normal / 1 = (internal clock) / 2 = SerialDump
+#define DISPLAY_TIMEOUT 2000  // how long active channel display is shown
 
 int length = 50;  // pulse length
 
-LedControl lc = LedControl(2, 3, 4, 1);
-
+LedControl lc = LedControl(LED_LOAD, LED_CLK, LED_DIN, 1);
+boolean diga_old;  // for encoders
+boolean digb_old;
 unsigned long time;
 unsigned long last_sync;
 
-int clocks[] = {
-    4, 8, 12, 16, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};  // possible values for n - to make knob easier by offering presets
-int noclocks = 19;                                                      // how many possible ns are available?
-
 int channels = 3;
 unsigned int beat_holder[3];
-
-/*
-Eeprom schema:
- Channel 1: n = 1 k = 2 o = 7
- Channel 2: n = 3 k = 4 o = 8
- Channel 3: n = 5 k = 6 0 = 9
- */
-
-unsigned int channelbeats[3][4] = {
-    {EEPROM.read(1), EEPROM.read(2), 0, EEPROM.read(7)}, {EEPROM.read(3), EEPROM.read(4), 0, EEPROM.read(8)}, {EEPROM.read(5), EEPROM.read(6), 0, EEPROM.read(9)}};  // 0=n, 1=k,2 = position , 3 = offset
-
-int a;
+unsigned int channelbeats[3][4];
 int changes = 0;
 boolean sleep = true;
 int masterclock = 0;
@@ -116,17 +74,14 @@ unsigned int looptracker;
 int old_total;   // for knobs
 int old_pulses;  // for knobs
 
-int pulseinput = 2;
 int newpulse;      // for trigger in
 int oldpulse = 1;  // for trigger in
 
-boolean diga_old;  // for encoders
-boolean digb_old;
 boolean pulses_active = false;  // is active while a beat pulse is playing
 boolean lights_active = false;
 
 int kknob;
-int active_channel = 1;  // which channel is active? zero indexed
+int active_channel = 0;  // which channel is active? zero indexed
 int nknob;
 int oknob;
 int maxn = 16;  // maximums and minimums for n and k
@@ -136,10 +91,6 @@ int nn;
 int kk;
 unsigned long last_read;
 unsigned long last_changed;
-
-int channel_switch;
-int reset_button;
-int channel_switch_read;
 
 void setup() {
     pinMode(ENC_1A, INPUT_PULLUP);
@@ -153,12 +104,17 @@ void setup() {
     pinMode(OUT_2, OUTPUT);
     pinMode(OUT_3, OUTPUT);
 
-    // The MAX72XX is in power-saving mode on startup, we have to do a wakeup call
-    lc.shutdown(0, false);
-    lc.setIntensity(0, BRIGHTNESS);
-    lc.clearDisplay(0);
+    if (DEBUG == 2) {
+        Serial.begin(9600);
+    }
 
-    if (EEPROM.read(1) > 17) {  // if eprom is blank / corrupted, write some startup amounts
+    /*
+    Eeprom schema:
+     Channel 1: n = 1 k = 2 o = 7
+     Channel 2: n = 3 k = 4 o = 8
+     Channel 3: n = 5 k = 6 o = 9
+     */
+    if (EEPROM.read(1) > 100) {  // if eprom is blank / corrupted, write some startup amounts
         EEPROM.write(1, 16);
         EEPROM.write(2, 4);
         EEPROM.write(3, 12);
@@ -167,14 +123,34 @@ void setup() {
         EEPROM.write(6, 5);
     }
 
-    if (DEBUG == 2) {
-        Serial.begin(9600);
-    }
+    channelbeats[0][0] = EEPROM.read(1);
+    channelbeats[0][1] = EEPROM.read(2);
+    channelbeats[0][2] = 0;
+    channelbeats[0][3] = EEPROM.read(7);
+    channelbeats[1][0] = EEPROM.read(3);
+    channelbeats[1][1] = EEPROM.read(4);
+    channelbeats[1][2] = 0;
+    channelbeats[1][3] = EEPROM.read(8);
+    channelbeats[2][0] = EEPROM.read(5);
+    channelbeats[2][1] = EEPROM.read(6);
+    channelbeats[2][2] = 0;
+    channelbeats[2][3] = EEPROM.read(9);
+    // 0 = n, 1 = k, 2 = position , 3 = offset
 
     // initialise beat holders
-    for (int a = 0; a < channels; a++) {
-        beat_holder[a] = euclid(channelbeats[a][0], channelbeats[a][1]);
+    for (int c = 0; c < channels; c++) {
+        beat_holder[c] = euclid(channelbeats[c][0], channelbeats[c][1]);
     }
+
+    // The MAX72XX is in power-saving mode on startup, we have to do a wakeup call
+    lc.shutdown(0, false);
+    lc.setIntensity(0, BRIGHTNESS);
+    lc.clearDisplay(0);
+    sleep = false;
+    wakeanim();
+    lc.setRow(0, 6, false);  // clear row 7
+    lc.setLed(0, 6, 5 - (active_channel * 2), true);
+    lc.setLed(0, 6, 5 - (active_channel * 2) - 1, true);
 }
 
 void loop() {
@@ -205,10 +181,16 @@ void loop() {
     };
 
     // SLEEP ROUTINE
-    if (sleep == false && time - last_sync > 600000UL) { // 10 minutes sleep
+    if (sleep == false && time - last_sync > 600000UL) {  // 10 minutes sleep
         sleepanim();
         lc.shutdown(0, true);
         sleep = true;
+    }
+    if (sleep == true && (newpulse > oldpulse || changes > 0))  // wake up routine & animation
+    {
+        lc.shutdown(0, false);
+        sleep = false;
+        wakeanim();
     }
 
     // UPDATE BEAT HOLDER WHEN KNOBS ARE MOVED
@@ -218,7 +200,7 @@ void loop() {
         lc.setRow(0, active_channel * 2, 0);      // clear line above active row
 
         if (changes == 1) {  // 1 = K changes - display beats in the active channel
-            for (a = 0; a < 8; a++) {
+            for (int a = 0; a < 8; a++) {
                 if (bitRead(beat_holder[active_channel], nn - 1 - a) == 1 && a < nn) {
                     lc.setLed(0, active_channel * 2, 7 - a, true);
                 }
@@ -229,7 +211,7 @@ void loop() {
         }
 
         if (changes == 2) {  // 2 = N changes, display total length of beat
-            for (a = 0; a < 8; a++) {
+            for (int a = 0; a < 8; a++) {
                 if (a < nn) {
                     lc.setLed(0, active_channel * 2, 7 - a, true);
                 }
@@ -244,7 +226,7 @@ void loop() {
     }
 
     // ANALOG PULSE TRIGGER
-    newpulse = map(analogRead(TRIG_IN), 0, 1024, 0, 3);  // Pulse input
+    newpulse = digitalRead(TRIG_IN);  // Pulse input
     if (newpulse > oldpulse) {
         Sync();
     }
@@ -297,20 +279,18 @@ void loop() {
     }
 
     // SELECT ACTIVE CHANNEL
-    channel_switch_read = analogRead(ENC_SWITCH);
-    if (channel_switch_read < 120) {
-        channel_switch = 3;
-    };
+    int channel_switch_read = analogRead(ENC_SWITCH);
+    int channel_switch = -1;
     if (channel_switch_read > 120 && channel_switch_read < 205) {
         channel_switch = 2;
     };
     if (channel_switch_read > 205 && channel_switch_read < 350) {
         channel_switch = 1;
     };
-    if (channel_switch_read > 350) {
+    if (channel_switch_read > 350 && channel_switch_read < 550) {
         channel_switch = 0;
     };
-    if (channel_switch != 3) {
+    if (channel_switch != -1) {
         active_channel = channel_switch;
 
         lc.setRow(0, 6, false);  // clear row 7
@@ -319,16 +299,17 @@ void loop() {
     };
 
     // ENABLE RESET BUTTON
-    reset_button = analogRead(RESET_BUT);
-    if (reset_button > 500 && channelbeats[0][2] > 0) {
-        for (a = 0; a < channels; a++) {
+    int reset_button = digitalRead(RESET_BUT);
+    int reset_input = digitalRead(RESET_IN);
+    if ((reset_button == HIGH || reset_input == HIGH) && channelbeats[0][2] > 0) {
+        for (int a = 0; a < channels; a++) {
             channelbeats[a][2] = 0;
         }
     }
 
     // TURN OFF ANY LIGHTS THAT ARE ON
     if (time - last_sync > length && lights_active == true) {
-        for (a = 0; a < channels; a++) {
+        for (int a = 0; a < channels; a++) {
             lc.setLed(0, 7, 5 - (a * 2), false);
             lc.setLed(0, 7, 4, false);  // spare pin flash
         }
@@ -337,7 +318,7 @@ void loop() {
 
     // FINISH ANY PULSES THAT ARE ACTIVE - PULSES LAST 1/4 AS LONG AS LIGHTS
     if (time - last_sync > (length / 4) && pulses_active == true) {
-        for (a = 0; a < channels; a++) {
+        for (int a = 0; a < channels; a++) {
             digitalWrite(11 + a, LOW);
             digitalWrite(OUT_AUX, LOW);
         }
@@ -359,7 +340,7 @@ unsigned int euclid(int n, int k) {  // inputs: n=total, k=beats, o = offset
     int a;
     int b;
     int trim_count;
-    for (a = 0; a < n; a++) {  // Populate workbeat with unsorted pulses and pauses
+    for (int a = 0; a < n; a++) {  // Populate workbeat with unsorted pulses and pauses
         if (a < pulses) {
             workbeat[a] = 1;
         } else {
@@ -368,7 +349,7 @@ unsigned int euclid(int n, int k) {  // inputs: n=total, k=beats, o = offset
     }
 
     if (per_pulse > 0 && remainder < 2) {  // Handle easy cases where there is no or only one remainer
-        for (a = 0; a < pulses; a++) {
+        for (int a = 0; a < pulses; a++) {
             for (b = workbeat_count - 1; b > workbeat_count - per_pulse - 1; b--) {
                 workbeat[a] = ConcatBin(workbeat[a], workbeat[b]);
             }
@@ -376,7 +357,7 @@ unsigned int euclid(int n, int k) {  // inputs: n=total, k=beats, o = offset
         }
 
         outbeat = 0;  // Concatenate workbeat into outbeat - according to workbeat_count
-        for (a = 0; a < workbeat_count; a++) {
+        for (int a = 0; a < workbeat_count; a++) {
             outbeat = ConcatBin(outbeat, workbeat[a]);
         }
         return outbeat;
@@ -393,7 +374,7 @@ unsigned int euclid(int n, int k) {  // inputs: n=total, k=beats, o = offset
             if (groupa > groupb) {                  // more Group A than Group B
                 int a_remainder = groupa - groupb;  // what will be left of groupa once groupB is interleaved
                 trim_count = 0;
-                for (a = 0; a < groupa - a_remainder; a++) {  // count through the matching sets of A, ignoring remaindered
+                for (int a = 0; a < groupa - a_remainder; a++) {  // count through the matching sets of A, ignoring remaindered
                     workbeat[a] = ConcatBin(workbeat[a], workbeat[workbeat_count - 1 - a]);
                     trim_count++;
                 }
@@ -406,7 +387,7 @@ unsigned int euclid(int n, int k) {  // inputs: n=total, k=beats, o = offset
             else if (groupb > groupa) {             // More Group B than Group A
                 int b_remainder = groupb - groupa;  // what will be left of group once group A is interleaved
                 trim_count = 0;
-                for (a = workbeat_count - 1; a >= groupa + b_remainder; a--) {  // count from right back through the Bs
+                for (int a = workbeat_count - 1; a >= groupa + b_remainder; a--) {  // count from right back through the Bs
                     workbeat[workbeat_count - a - 1] = ConcatBin(workbeat[workbeat_count - a - 1], workbeat[a]);
 
                     trim_count++;
@@ -417,7 +398,7 @@ unsigned int euclid(int n, int k) {  // inputs: n=total, k=beats, o = offset
 
             else if (groupa == groupb) {  // groupa = groupb
                 trim_count = 0;
-                for (a = 0; a < groupa; a++) {
+                for (int a = 0; a < groupa; a++) {
                     workbeat[a] = ConcatBin(workbeat[a], workbeat[workbeat_count - 1 - a]);
                     trim_count++;
                 }
@@ -432,7 +413,7 @@ unsigned int euclid(int n, int k) {  // inputs: n=total, k=beats, o = offset
         }
 
         outbeat = 0;  // Concatenate workbeat into outbeat - according to workbeat_count
-        for (a = 0; a < workbeat_count; a++) {
+        for (int a = 0; a < workbeat_count; a++) {
             outbeat = ConcatBin(outbeat, workbeat[a]);
         }
 
@@ -464,16 +445,6 @@ unsigned int ConcatBin(unsigned int bina, unsigned int binb) {
 
 // routine triggered by each beat
 void Sync() {
-    if (sleep == true)  // wake up routine & animation
-    {
-        lc.shutdown(0, false);
-        sleep = false;
-        wakeanim();
-    }
-
-    // clear bottom row
-    // lc.setRow(0,7,0);
-
     if (masterclock % 2 == 0) {  // tick bottom left corner on and off with clock
         lc.setLed(0, 7, 7, true);
     } else {
@@ -481,9 +452,9 @@ void Sync() {
     }
 
     // Cycle through channels
-    for (a = 0; a < channels; a++) {
+    for (int a = 0; a < channels; a++) {
         read_head = channelbeats[a][0] - channelbeats[a][2] - 1;
-        if (a != active_channel || time - last_changed > LED_REFRESH)  // don't clear or draw cursor if channel is being changed
+        if (a != active_channel || time - last_changed > DISPLAY_TIMEOUT)  // don't clear or draw cursor if channel is being changed
         {
             lc.setRow(0, a * 2, 0);  // clear line above active row
 
@@ -587,7 +558,7 @@ int EncodeRead(int apin, int bpin) {
 }
 
 void wakeanim() {
-    for (a = 4; a > 0; a--) {
+    for (int a = 4; a > 0; a--) {
         lc.setIntensity(0, 8 - a * 2);
         lc.setRow(0, a, 255);
         lc.setRow(0, 8 - a, 255);
@@ -597,7 +568,7 @@ void wakeanim() {
     }
 }
 void sleepanim() {
-    for (a = 0; a < 4; a++) {
+    for (int a = 0; a < 4; a++) {
         lc.setIntensity(0, a * 2);
         lc.setRow(0, a, 255);
         lc.setRow(0, 8 - a, 255);
