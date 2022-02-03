@@ -1,8 +1,8 @@
-# EUGENE Euclidean Rhythm Generator
+# Eugene Euclidean Rhythm Generator
 
-## Euclidean Rhythm Generator Code
+## Code
 
-2022-01-23 Alessio Nuti
+2022-02-03 Alessio Nuti
 
 Release Notes:
 - new code based on both [TimMJN] and [Tombola] implementations
@@ -16,3 +16,10 @@ Release Notes:
 ### Acknowledgements
 -[Tombola](https://modwiggler.com/forum/viewtopic.php?t=45485)'s Euclidean Rhythm Generator
 -[TimMJN](https://github.com/TimMJN/Arduino-Euclidean-Rhythm-Generator)'s Arduino Euclidean Rhythm Generator
+
+
+## Hardware
+
+Notes:
+- added 10uF decoupling capacitor to LED matrix power input
+- Rset value increased to 470 kOhm in order to reduce LED current and induced noise

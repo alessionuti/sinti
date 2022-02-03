@@ -1,24 +1,19 @@
 #include <EEPROM.h>
 #include <LedControl.h>
 
-
 /*
 EUGENE Euclidean Rhythm Generator
-2022-01-23 Alessio Nuti
+2022-02-03 Alessio Nuti
 Release Notes:
 - 4 channels
 - all encoders working (1 = length, 2 = hits, 3 = offset)
-- all switches working (1 = switch channel, 2 = enter clock divider controlled by potentiometer, 3 = sleep display)
+- all switches working (1 = switch channel, 2 = enter clock divider setting, 3 = sleep display)
 - clock managed by interrupts
 - euclidean algorithm rewritten
-- UI with scrolling display (1 line per channel), and a common area for displaying active changes
+- UI with page scrolling display (1 line per channel), and a common area for displaying active changes
 To do:
 - implement per-channel clock divider
-- improve display layout
-BUGS:
-- crash at startup after some cycles, then ok
 */
-
 
 #define ENC_1A 6  // n / length
 #define ENC_1B 5
@@ -39,7 +34,7 @@ BUGS:
 #define RESET_BUT A4
 #define POT A5
 
-#define BRIGHTNESS 4
+#define BRIGHTNESS 15          // max brightness ok when R = 470 ohm
 #define DEBUG 0                // 0 = normal / 1 = internal clock / 2= serial debug
 #define DISPLAY_TIMEOUT 2000   // ms
 #define ENC_DEBOUNCE 50        // ms
@@ -50,6 +45,7 @@ BUGS:
 #define N_CHANNELS 4   // number of channels
 #define MAX_LENGTH 16  // max sequence length
 #define MIN_LENGTH 1   // min sequence length
+#define MAX_DIV 16     // max clock division
 
 LedControl lc = LedControl(LED_LOAD, LED_CLK, LED_DIN, 1);
 const byte OUT_PINS[N_CHANNELS] = {OUT_1, OUT_2, OUT_3, OUT_4};
@@ -64,8 +60,8 @@ unsigned long time = 0;
 unsigned long last_sync = 0;
 unsigned long last_read = 0;
 unsigned long last_switch = 0;
-bool sleep = true;
-bool sleep_switch = false;
+bool sleep_status = true;
+bool sleep_command = false;
 int ch_active = 0;  // channel active, zero indexed
 int mode = 0;       // mode active 0 = normal / 1 = length / 2 = beats / 3 = clockdivider
 
@@ -75,12 +71,12 @@ volatile byte k_hits[N_CHANNELS];     // number of hits in the sequence
 volatile byte o_offset[N_CHANNELS];   // off-set of the sequence
 volatile byte clock_div[N_CHANNELS];  // clock division
 volatile byte curr_step[N_CHANNELS];  // current step
+volatile byte disp_index[N_CHANNELS];
 volatile bool sequence[N_CHANNELS][MAX_LENGTH];
+volatile bool sequence_div[N_CHANNELS][MAX_LENGTH * MAX_DIV];
 volatile bool reset = false;
 volatile bool pulses_active = false;
 volatile unsigned long last_pulse = 0;
-
-bool tosync = true;
 
 void setup() {
     pinMode(ENC_1A, INPUT_PULLUP);
@@ -95,7 +91,7 @@ void setup() {
     pinMode(OUT_4, OUTPUT);
 
     if (DEBUG == 2) {
-        Serial.begin(9600);
+        Serial.begin(115200);
     }
 
     if (EEPROM.read(255) != 127 || EEPROM.read(256) != 128) {  // if EEPROM is blank / corrupted, write some startup amounts
@@ -121,6 +117,7 @@ void setup() {
         o_offset[i] = EEPROM.read(i + 8);
         clock_div[i] = 1;
         curr_step[i] = 0;
+        disp_index[i] = 0;
     }
     updateSequence();
 
@@ -131,7 +128,7 @@ void setup() {
     lc.shutdown(0, false);
     lc.setIntensity(0, BRIGHTNESS);
     lc.clearDisplay(0);
-    sleep = false;
+    sleep_status = false;
     wakeanim();
 }
 
@@ -142,16 +139,16 @@ void loop() {
     reset = (digitalRead(RESET_BUT) == HIGH || digitalRead(RESET_IN) == LOW);
 
     // SLEEP ROUTINE
-    if (!sleep && sleep_switch) {
+    if (!sleep_status && sleep_command) {
         sleepanim();
         lc.shutdown(0, true);
-        sleep = true;
+        sleep_status = true;
     }
-    if (sleep && !sleep_switch) {
+    if (sleep_status && !sleep_command) {
         lc.clearDisplay(0);
         lc.shutdown(0, false);
         wakeanim();
-        sleep = false;
+        sleep_status = false;
     }
 
     if (time - last_read > DISPLAY_TIMEOUT) {
@@ -223,9 +220,8 @@ void loop() {
 int switchRead() {
     // read encoder switches
     int switch_read = analogRead(ENC_SWITCH);
-    int channel_switch = -1;
     if (switch_read > 120 && switch_read < 205 && time - last_switch > SWITCH_DEBOUNCE) {
-        sleep_switch = !sleep_switch;  // switch ENC3 = sleep
+        sleep_command = !sleep_command;  // switch ENC3 = sleep
         last_switch = millis();
     };
     if (switch_read > 205 && switch_read < 350 && time - last_switch > SWITCH_DEBOUNCE) {
@@ -315,26 +311,32 @@ void updateSequence() {
 }
 
 void clock_isr() {
-    if (!digitalRead(CLK_IN)) {  // rising edge on input
-        for (int i = 0; i < N_CHANNELS; i++) {
-            // update current step
-            if (reset) {
-                curr_step[i] = 0;
-            } else {
-                curr_step[i] = (curr_step[i] + 1) % n_length[i];
-            }
-            // set outputs
-            if (sequence[i][curr_step[i]])
-                digitalWrite(OUT_PINS[i], HIGH);
-            else
-                digitalWrite(OUT_PINS[i], LOW);
-        }
+    if (!digitalRead(CLK_IN)) {  // rising edge on input (input is inverted by the analog circuit)
+        // update master clock
         if (reset) {
             master_clock = 0;
         } else {
             master_clock = (master_clock + 1) % 8;
         }
-        pulses_active = true;
+        for (int i = 0; i < N_CHANNELS; i++) {
+            // update current step and display index
+            if (reset) {
+                curr_step[i] = 0;
+                disp_index[i] = 0;
+            } else {
+                curr_step[i] = (curr_step[i] + 1) % n_length[i];
+                if (master_clock == 0) {
+                    disp_index[i] = (disp_index[i] + 8) % n_length[i];
+                }
+            }
+            // set outputs
+            if (sequence[i][curr_step[i]]) {
+                digitalWrite(OUT_PINS[i], HIGH);
+                pulses_active = true;
+            } else {
+                digitalWrite(OUT_PINS[i], LOW);
+            }
+        }
         last_pulse = millis();
     } else {  // falling edge on input
         for (int i = 0; i < N_CHANNELS; i++) {
@@ -361,20 +363,18 @@ void setChLed(int i, bool state) {
 
 void updateLeds() {
     setRowCorr(0, 0);  // clear master clock row
-    setLedCorr(0, 0, true);
-    // setLedCorr(0, master_clock, true);
-
+    setLedCorr(0, master_clock, true);
     for (int i = 0; i < N_CHANNELS; i++) {
         setRowCorr(i + 1, 0);  // clear active row
         for (int c = 0; c < 8; c++) {
-            if (sequence[i][(c + curr_step[i]) % n_length[i]]) {
+            if (sequence[i][(c + disp_index[i]) % n_length[i]]) {
                 setLedCorr(i + 1, c, true);
             }
         }
-
+        // bottom row flash
         if (mode == 0) {
             if (sequence[i][curr_step[i]] && pulses_active) {
-                setChLed(i, true);  // bottom row flash
+                setChLed(i, true);
             } else {
                 setChLed(i, false);
             }

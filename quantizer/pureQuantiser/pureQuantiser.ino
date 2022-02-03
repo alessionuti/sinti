@@ -19,7 +19,7 @@ Release Notes:
 
 //Global parameters
 const byte RANGE = 10;          // total range in octaves
-const float ADC_FS = 4095 * 0.977; // ADC fullscale value (see readme for calibration procedures)
+const float ADC_FS = 4095 * 0.955; // ADC fullscale value (see readme for calibration procedures)
 const float octVal = 4095.0 / RANGE;
 const float noteVal = octVal / 12.0;
 
