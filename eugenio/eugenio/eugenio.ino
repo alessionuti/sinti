@@ -2,7 +2,7 @@
 #include <LedControl.h>
 
 /*
-EUGENE Euclidean Rhythm Generator
+Eugenio Euclidean Rhythm Generator
 2022-02-03 Alessio Nuti
 Release Notes:
 - 4 channels

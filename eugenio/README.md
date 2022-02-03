@@ -1,4 +1,4 @@
-# Eugene Euclidean Rhythm Generator
+# Eugenio Euclidean Rhythm Generator
 
 ## Code
 
@@ -14,7 +14,7 @@ Release Notes:
 - UI with scrolling display (1 line per channel), and a common area for displaying active changes
 
 ### Acknowledgements
-- [Tombola](https://modwiggler.com/forum/viewtopic.php?t=45485)'s Euclidean Rhythm Generator
+- [Tombola](https://modwiggler.com/forum/viewtopic.php?t=45485)'s Euclidean Polyrhythm Generator
 - [TimMJN](https://github.com/TimMJN/Arduino-Euclidean-Rhythm-Generator)'s Arduino Euclidean Rhythm Generator
 
 
