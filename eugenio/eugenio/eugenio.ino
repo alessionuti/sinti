@@ -3,80 +3,86 @@
 
 /*
 Eugenio Euclidean Rhythm Generator
-2022-02-03 Alessio Nuti
-Release Notes:
-- 4 channels
-- all encoders working (1 = length, 2 = hits, 3 = offset)
-- all switches working (1 = switch channel, 2 = enter clock divider setting, 3 = sleep display)
-- clock managed by interrupts
-- euclidean algorithm rewritten
-- UI with page scrolling display (1 line per channel), and a common area for displaying active changes
-To do:
-- implement per-channel clock divider
+2022-03-09 Alessio Nuti
+Rev. D
 */
 
 #define ENC_1A 6  // n / length
 #define ENC_1B 5
-#define ENC_2A 8  // k / beats
+#define ENC_2A 8  // k / hits
 #define ENC_2B 7
 #define ENC_3A 10  // o / offset
 #define ENC_3B 9
-#define ENC_SWITCH A2
-#define OUT_1 A3
-#define OUT_2 11
-#define OUT_3 12
-#define OUT_4 13
-#define LED_DIN 4
-#define LED_CLK 3
-#define LED_LOAD A0
+#define ENC_SWITCH A0
+#define OUT_1 A1
+#define OUT_2 A2
+#define OUT_3 A3
+#define OUT_4 A4
+#define LED_LOAD 11
+#define LED_CLK 12
+#define LED_DIN 13
 #define CLK_IN 2
-#define RESET_IN A1
-#define RESET_BUT A4
+#define RESET_IN 3
+#define RESET_BUT 4
 #define POT A5
 
-#define BRIGHTNESS 15          // max brightness ok when R = 470 ohm
-#define DEBUG 0                // 0 = normal / 1 = internal clock / 2= serial debug
-#define DISPLAY_TIMEOUT 2000   // ms
-#define ENC_DEBOUNCE 50        // ms
-#define SWITCH_DEBOUNCE 200    // ms
-#define MAX_PULSE_LENGTH 1000  // ms
+#define BRIGHTNESS 15               // max brightness ok when R = 470 ohm
+#define TIMEOUT_DISPLAY 4000        // ms
+#define ENC_DEBOUNCE 50             // ms
+#define SWITCH_DEBOUNCE 100         // ms
+#define SWITCH_SHORT_PRESS_TIME 10  // ms
+#define SWITCH_LONG_PRESS_TIME 500  // ms
 
 // constants
-#define N_CHANNELS 4   // number of channels
-#define MAX_LENGTH 16  // max sequence length
-#define MIN_LENGTH 1   // min sequence length
-#define MAX_DIV 16     // max clock division
+#define N_CHANNELS 4             // number of channels
+#define MAX_LENGTH 16            // max sequence length
+#define MIN_LENGTH 1             // min sequence length
+#define MAX_PULSE_DURATION 1000  // ms
+#define MIN_PULSE_DURATION 10    // ms
+#define CURVE_PULSE_DURATION 1
+#define MAX_BPM 480
+#define MIN_BPM 60
+#define CURVE_BPM 1
 
-LedControl lc = LedControl(LED_LOAD, LED_CLK, LED_DIN, 1);
+LedControl lc = LedControl(LED_DIN, LED_CLK, LED_LOAD, 1);
 const byte OUT_PINS[N_CHANNELS] = {OUT_1, OUT_2, OUT_3, OUT_4};
+const int SWITCH_THRESHOLD[4] = {550, 350, 205, 120};
 bool diga_old;  // for encoders
 bool digb_old;
-int nknob;
-int kknob;
-int oknob;
-int pot_val;
-int last_pot_val;
+int enc_reading[3] = {0, 0, 0};
+float pot_val;
+float pot_val_old;
+int sw_val;
 unsigned long time = 0;
-unsigned long last_sync = 0;
-unsigned long last_read = 0;
-unsigned long last_switch = 0;
+unsigned long last_clock = 0;
+unsigned long last_touched = 0;
+unsigned long last_enc = 0;
+unsigned long last_sw_pressed[3] = {0, 0, 0};
+unsigned long last_sw_released[3] = {0, 0, 0};
+bool sw_pressed[3] = {false, false, false};
+bool sw_holded[3] = {false, false, false};
+bool sw_short_press[3] = {false, false, false};
+bool sw_long_press[3] = {false, false, false};
 bool sleep_status = true;
 bool sleep_command = false;
+volatile bool clock_internal = false;
+int bpm_clock_int;
 int ch_active = 0;  // channel active, zero indexed
-int mode = 0;       // mode active 0 = normal / 1 = length / 2 = beats / 3 = clockdivider
-
-volatile byte master_clock = 0;
-volatile byte n_length[N_CHANNELS];   // length of the sequence
-volatile byte k_hits[N_CHANNELS];     // number of hits in the sequence
-volatile byte o_offset[N_CHANNELS];   // off-set of the sequence
-volatile byte clock_div[N_CHANNELS];  // clock division
-volatile byte curr_step[N_CHANNELS];  // current step
-volatile byte disp_index[N_CHANNELS];
-volatile bool sequence[N_CHANNELS][MAX_LENGTH];
-volatile bool sequence_div[N_CHANNELS][MAX_LENGTH * MAX_DIV];
+int mode = 0;       // display mode active 0 = normal / 1 = length / 2 = beats / 3 = gate length  / 4 = int clock tempo
+bool bpm_saved = true;
+bool pulse_duration_saved = true;
+byte master_clock = 0;
+byte n_length[N_CHANNELS];   // length of the sequence
+byte k_hits[N_CHANNELS];     // number of hits in the sequence
+byte o_offset[N_CHANNELS];   // off-set of the sequence
+byte curr_step[N_CHANNELS];  // current step
+byte disp_index[N_CHANNELS];
+bool sequence[N_CHANNELS][MAX_LENGTH];
+bool pulse_active[N_CHANNELS];
+int pulse_duration[N_CHANNELS];
+unsigned long last_pulse[N_CHANNELS];
 volatile bool reset = false;
-volatile bool pulses_active = false;
-volatile unsigned long last_pulse = 0;
+volatile bool clock = false;
 
 void setup() {
     pinMode(ENC_1A, INPUT_PULLUP);
@@ -90,39 +96,50 @@ void setup() {
     pinMode(OUT_3, OUTPUT);
     pinMode(OUT_4, OUTPUT);
 
-    if (DEBUG == 2) {
-        Serial.begin(115200);
-    }
+    if (EEPROM.read(255) != 127 || EEPROM.read(256) != 128) {
+        // if EEPROM is blank / corrupted, write some startup amounts
+        EEPROM.write(0, 8);     // 1n
+        EEPROM.write(1, 4);     // 1k
+        EEPROM.write(2, 0);     // 1o
+        writeIntEEPROM(3, 10);  // pulse length
 
-    if (EEPROM.read(255) != 127 || EEPROM.read(256) != 128) {  // if EEPROM is blank / corrupted, write some startup amounts
-        EEPROM.write(0, 8);                                    // 1n
-        EEPROM.write(1, 8);                                    // 2n
-        EEPROM.write(2, 8);                                    // 3n
-        EEPROM.write(3, 8);                                    // 4n
-        EEPROM.write(4, 4);                                    // 1k
-        EEPROM.write(5, 4);                                    // 2k
-        EEPROM.write(6, 4);                                    // 3k
-        EEPROM.write(7, 4);                                    // 4k
-        EEPROM.write(8, 0);                                    // 1o
-        EEPROM.write(9, 0);                                    // 2o
-        EEPROM.write(10, 0);                                   // 3o
-        EEPROM.write(11, 0);                                   // 4o
-        EEPROM.write(255, 127);                                // two values to check if EEPROM has been initialized correctly
+        EEPROM.write(10, 8);     // 2n
+        EEPROM.write(11, 4);     // 2k
+        EEPROM.write(12, 0);     // 2o
+        writeIntEEPROM(13, 10);  // pulse length
+
+        EEPROM.write(20, 8);     // 3n
+        EEPROM.write(21, 4);     // 3k
+        EEPROM.write(22, 0);     // 3o
+        writeIntEEPROM(23, 10);  // pulse length
+
+        EEPROM.write(30, 8);     // 4n
+        EEPROM.write(31, 4);     // 4k
+        EEPROM.write(32, 0);     // 4o
+        writeIntEEPROM(33, 10);  // pulse length
+
+        writeIntEEPROM(128, 80);  // bpm
+
+        EEPROM.write(255, 127);  // two values to check if EEPROM has been initialized correctly
         EEPROM.write(256, 128);
     }
 
     for (int i = 0; i < N_CHANNELS; i++) {
-        n_length[i] = EEPROM.read(i);
-        k_hits[i] = EEPROM.read(i + 4);
-        o_offset[i] = EEPROM.read(i + 8);
-        clock_div[i] = 1;
+        n_length[i] = EEPROM.read(i * 10);
+        k_hits[i] = EEPROM.read(i * 10 + 1);
+        o_offset[i] = EEPROM.read(i * 10 + 2);
         curr_step[i] = 0;
         disp_index[i] = 0;
+        pulse_active[i] = false;
+        pulse_duration[i] = readIntEEPROM(i * 10 + 3);
+        last_pulse[i] = 0;
     }
     updateSequence();
+    bpm_clock_int = readIntEEPROM(128);
 
-    // set up Arduino interrupt
-    attachInterrupt(digitalPinToInterrupt(CLK_IN), clock_isr, CHANGE);
+    // set up Arduino interrupts
+    attachInterrupt(digitalPinToInterrupt(CLK_IN), clock_isr, FALLING);    // rising edge on input (input is inverted by the analog circuit)
+    attachInterrupt(digitalPinToInterrupt(RESET_IN), reset_isr, FALLING);  // ""
 
     // The MAX72XX is in power-saving mode on startup, we have to do a wakeup call
     lc.shutdown(0, false);
@@ -134,9 +151,6 @@ void setup() {
 
 void loop() {
     time = millis();
-
-    // HANDLE RESET
-    reset = (digitalRead(RESET_BUT) == HIGH || digitalRead(RESET_IN) == LOW);
 
     // SLEEP ROUTINE
     if (!sleep_status && sleep_command) {
@@ -151,88 +165,168 @@ void loop() {
         sleep_status = false;
     }
 
-    if (time - last_read > DISPLAY_TIMEOUT) {
+    // TIMEOUTS
+    if (time - last_touched > TIMEOUT_DISPLAY) {
         mode = 0;
     }
 
-    // READ N KNOB
-    nknob = encoderRead(ENC_1A, ENC_1B);
-    if (nknob != 0 && time - last_read > ENC_DEBOUNCE) {
-        n_length[ch_active] = constrain((int)n_length[ch_active] + nknob, MIN_LENGTH, MAX_LENGTH);
+    // SAVE POT DATA
+
+    if (mode != 3 && !pulse_duration_saved) {
+        for (int i = 0; i < N_CHANNELS; i++) {
+            writeIntEEPROM(i * 10 + 3, pulse_duration[i]);
+        }
+        pulse_duration_saved = true;
+    }
+
+    if (mode != 4 && !bpm_saved) {
+        writeIntEEPROM(128, bpm_clock_int);
+        bpm_saved = true;
+    }
+
+    // READ ENCODERS
+    // ENCODER 1 (N)
+    enc_reading[0] = encoderRead(ENC_1A, ENC_1B);
+    if (enc_reading[0] != 0 && time - last_enc > ENC_DEBOUNCE) {
+        n_length[ch_active] = constrain((int)n_length[ch_active] + enc_reading[0], MIN_LENGTH, MAX_LENGTH);
         k_hits[ch_active] = constrain((int)k_hits[ch_active], 0, n_length[ch_active]);
-        EEPROM.write(ch_active, n_length[ch_active]);
-        EEPROM.write(ch_active + 4, k_hits[ch_active]);
+        EEPROM.write(ch_active * 10, n_length[ch_active]);
+        EEPROM.write(ch_active * 10 + 1, k_hits[ch_active]);
         updateSequence();
         mode = 1;
         updateLedsMode1();
-        last_read = millis();
+        last_enc = millis();
+        last_touched = last_enc;
     }
-
-    // READ K KNOB
-    kknob = encoderRead(ENC_2A, ENC_2B);
-    if (kknob != 0 && time - last_read > ENC_DEBOUNCE) {
-        k_hits[ch_active] = constrain((int)k_hits[ch_active] + kknob, 0, n_length[ch_active]);  // update with encoder reading
-        EEPROM.write(ch_active + 4, k_hits[ch_active]);
+    // ENCODER 2 (K)
+    enc_reading[1] = encoderRead(ENC_2A, ENC_2B);
+    if (enc_reading[1] != 0 && time - last_enc > ENC_DEBOUNCE) {
+        k_hits[ch_active] = constrain((int)k_hits[ch_active] + enc_reading[1], 0, n_length[ch_active]);  // update with encoder reading
+        EEPROM.write(ch_active * 10 + 1, k_hits[ch_active]);
         updateSequence();
         mode = 2;
         updateLedsMode2();
-        last_read = millis();
+        last_enc = millis();
+        last_touched = last_enc;
     }
-
-    // READ O KNOB
-    oknob = encoderRead(ENC_3A, ENC_3B);
-    if (oknob != 0 && time - last_read > ENC_DEBOUNCE) {
-        o_offset[ch_active] += (oknob + n_length[ch_active]);
+    // ENCODER 3 (O)
+    enc_reading[2] = encoderRead(ENC_3A, ENC_3B);
+    if (enc_reading[2] != 0 && time - last_enc > ENC_DEBOUNCE) {
+        o_offset[ch_active] += (enc_reading[2] + n_length[ch_active]);
         o_offset[ch_active] %= n_length[ch_active];  // update with encoder reading
-        EEPROM.write(ch_active + 8, o_offset[ch_active]);
+        EEPROM.write(ch_active * 10 + 2, o_offset[ch_active]);
         updateSequence();
         mode = 2;
         updateLedsMode2();
-        last_read = millis();
+        last_enc = millis();
+        last_touched = last_enc;
     }
 
     // READ SWITCHES
-    switchRead();
-
-    // READ POTENTIOMETER
-    pot_val = analogRead(POT);
-    int pot_scaled = floor(pot_val / 1024.0 * 16.0) + 1;
-    if (mode == 3) {
-        if (abs(pot_val - last_pot_val) > 10 && abs(clock_div[ch_active] - pot_scaled) < 2) {
-            clock_div[ch_active] = pot_scaled;
-            last_pot_val = pot_val;
-            last_read = millis();
+    sw_val = analogRead(ENC_SWITCH);
+    // SWITCH 1
+    switchRead(0, sw_val);
+    if (sw_short_press[0]) {
+        sw_short_press[0] = false;
+        clock_internal = !clock_internal;  // switch ENC1 = clock mode
+        mode = 0;
+    }
+    // SWITCH 2
+    switchRead(1, sw_val);
+    if (sw_short_press[1]) {
+        sw_short_press[1] = false;
+        ch_active = (ch_active + 1) % N_CHANNELS;  // switch ENC2 = active channel
+        switch (mode) {
+            case 1:
+                updateLedsMode1();
+                break;
+            case 2:
+                updateLedsMode2();
+                break;
+            case 3:
+                updateLedsMode3(potNormalizeParam(pulse_duration[ch_active], MIN_PULSE_DURATION, MAX_PULSE_DURATION, CURVE_PULSE_DURATION));
+                break;
         }
-        updateLedsMode3();
+    }
+    if (sw_long_press[1]) {
+        sw_long_press[1] = false;
+        sleep_command = !sleep_command;
+    }
+    // SWITCH 3
+    switchRead(2, sw_val);
+    if (sw_short_press[2]) {
+        sw_short_press[2] = false;
+        mode = 3;
+        updateLedsMode3(potNormalizeParam(pulse_duration[ch_active], MIN_PULSE_DURATION, MAX_PULSE_DURATION, CURVE_PULSE_DURATION));
     }
 
-    // FINISH ANY PULSES EXCEEDING MAX_PULSE_LENGTH
-    if (millis() - last_pulse > MAX_PULSE_LENGTH && pulses_active == true) {
-        for (int i = 0; i < N_CHANNELS; i++) {
-            digitalWrite(OUT_PINS[i], LOW);
+    // READ POTENTIOMETER
+    pot_val = analogRead(POT) / 1023.0f;
+    float delta = pot_val - pot_val_old;
+    if (fabs(delta) > 0.005f) {  // pot touched
+        last_touched = time;
+        if (mode == 3) {
+            pulse_duration_saved = false;
+            float param = potNewParam(delta, potNormalizeParam(pulse_duration[ch_active], MIN_PULSE_DURATION, MAX_PULSE_DURATION, CURVE_PULSE_DURATION), pot_val_old);
+            pulse_duration[ch_active] = potCalculateParam(param, MIN_PULSE_DURATION, MAX_PULSE_DURATION, CURVE_PULSE_DURATION);
+            updateLedsMode3(param);
+        } else if (clock_internal) {
+            mode = 4;
+            bpm_saved = false;
+            float param = potNewParam(delta, potNormalizeParam(bpm_clock_int, MIN_BPM, MAX_BPM, CURVE_BPM), pot_val_old);
+            bpm_clock_int = potCalculateParam(param, MIN_BPM, MAX_BPM, CURVE_BPM);
+            updateLedsMode4(param);
         }
-        pulses_active = false;
+        pot_val_old = pot_val;
+    }
+
+    // INTERNAL CLOCK
+    if (clock_internal && time - last_clock > 60.0f / bpm_clock_int * 1000) {
+        clock = true;
+    }
+
+    // CLOCK ADVANCE ROUTINE
+    if (clock) {
+        clock = false;
+        if (reset || digitalRead(RESET_BUT) == HIGH) {
+            reset = false;
+            master_clock = 0;
+            for (int i = 0; i < N_CHANNELS; i++) {
+                curr_step[i] = 0;
+                disp_index[i] = 0;
+            }
+        } else {
+            master_clock = (master_clock + 1) % 8;
+            for (int i = 0; i < N_CHANNELS; i++) {
+                // update current step and display index
+                curr_step[i] = (curr_step[i] + 1) % n_length[i];
+                if (master_clock == 0) {
+                    disp_index[i] = (disp_index[i] + 8) % n_length[i];
+                }
+            }
+        }
+        for (int i = 0; i < N_CHANNELS; i++) {
+            // set outputs
+            if (sequence[i][curr_step[i]]) {
+                digitalWrite(OUT_PINS[i], HIGH);
+                pulse_active[i] = true;
+                last_pulse[i] = time;
+                // } else {
+                // digitalWrite(OUT_PINS[i], LOW);
+            }
+        }
+        last_clock = time;
+    }
+
+    // FINISH PULSES
+    for (int i = 0; i < N_CHANNELS; i++) {
+        if (time - last_pulse[i] > pulse_duration[i] && pulse_active[i] == true) {
+            digitalWrite(OUT_PINS[i], LOW);
+            pulse_active[i] = false;
+        }
     }
 
     updateLeds();
-}
-
-int switchRead() {
-    // read encoder switches
-    int switch_read = analogRead(ENC_SWITCH);
-    if (switch_read > 120 && switch_read < 205 && time - last_switch > SWITCH_DEBOUNCE) {
-        sleep_command = !sleep_command;  // switch ENC3 = sleep
-        last_switch = millis();
-    };
-    if (switch_read > 205 && switch_read < 350 && time - last_switch > SWITCH_DEBOUNCE) {
-        mode = 3;  // switch ENC2 = clock division mode
-        last_switch = millis();
-        last_read = millis();
-    };
-    if (switch_read > 350 && switch_read < 550 && time - last_switch > SWITCH_DEBOUNCE) {
-        ch_active = (ch_active + 1) % N_CHANNELS;  // switch ENC2 = active channel
-        last_switch = millis();
-    };
 }
 
 int encoderRead(int apin, int bpin) {
@@ -267,6 +361,31 @@ int encoderRead(int apin, int bpin) {
         digb_old = digb;
     }
     return result;
+}
+
+void switchRead(int n, int sw_value) {
+    if (sw_value > SWITCH_THRESHOLD[n + 1] && sw_value < SWITCH_THRESHOLD[n] && time - last_sw_pressed[n] > SWITCH_DEBOUNCE && time - last_sw_released[n] > SWITCH_DEBOUNCE) {
+        if (!sw_pressed[n]) {
+            if (time - last_sw_pressed[n] > SWITCH_SHORT_PRESS_TIME) {
+                sw_pressed[n] = true;
+                last_sw_pressed[n] = millis();
+                last_touched = last_sw_pressed[n];
+            }
+        } else if (!sw_holded[n]) {
+            if (time - last_sw_pressed[n] >= SWITCH_LONG_PRESS_TIME) {
+                sw_holded[n] = true;
+                sw_long_press[n] = true;
+            }
+        }
+    } else if (sw_pressed[n] && time - last_sw_pressed[n] > SWITCH_DEBOUNCE && time - last_sw_released[n] > SWITCH_DEBOUNCE) {
+        sw_pressed[n] = false;
+        sw_holded[n] = false;
+        last_sw_released[n] = millis();
+        last_touched = last_sw_released[n];
+        if (last_sw_released[n] - last_sw_pressed[n] < SWITCH_LONG_PRESS_TIME) {
+            sw_short_press[n] = true;
+        }
+    }
 }
 
 void wakeanim() {
@@ -311,39 +430,12 @@ void updateSequence() {
 }
 
 void clock_isr() {
-    if (!digitalRead(CLK_IN)) {  // rising edge on input (input is inverted by the analog circuit)
-        // update master clock
-        if (reset) {
-            master_clock = 0;
-        } else {
-            master_clock = (master_clock + 1) % 8;
-        }
-        for (int i = 0; i < N_CHANNELS; i++) {
-            // update current step and display index
-            if (reset) {
-                curr_step[i] = 0;
-                disp_index[i] = 0;
-            } else {
-                curr_step[i] = (curr_step[i] + 1) % n_length[i];
-                if (master_clock == 0) {
-                    disp_index[i] = (disp_index[i] + 8) % n_length[i];
-                }
-            }
-            // set outputs
-            if (sequence[i][curr_step[i]]) {
-                digitalWrite(OUT_PINS[i], HIGH);
-                pulses_active = true;
-            } else {
-                digitalWrite(OUT_PINS[i], LOW);
-            }
-        }
-        last_pulse = millis();
-    } else {  // falling edge on input
-        for (int i = 0; i < N_CHANNELS; i++) {
-            digitalWrite(OUT_PINS[i], LOW);
-        }
-        pulses_active = false;
-    }
+    if (!clock_internal)
+        clock = true;
+}
+
+void reset_isr() {
+    reset = true;
 }
 
 void setLedCorr(int row, int col, bool state) {
@@ -373,7 +465,7 @@ void updateLeds() {
         }
         // bottom row flash
         if (mode == 0) {
-            if (sequence[i][curr_step[i]] && pulses_active) {
+            if (sequence[i][curr_step[i]] && pulse_active[i]) {
                 setChLed(i, true);
             } else {
                 setChLed(i, false);
@@ -416,15 +508,46 @@ void updateLedsMode2() {
     }
 }
 
-void updateLedsMode3() {
+void updateLedsMode3(float param_normalized) {
     setRowCorr(5, 0);
     setRowCorr(6, 0);
     for (int a = 0; a < 8; a++) {
-        if (a < clock_div[ch_active]) {
-            setLedCorr(5, a, true);
-        }
-        if (a + 8 < clock_div[ch_active]) {
+        if (a < param_normalized * 7 + 0.5)
             setLedCorr(6, a, true);
-        }
     }
+}
+
+void updateLedsMode4(float param_normalized) {
+    setRowCorr(5, 0);
+    setRowCorr(6, 0);
+    for (int a = 0; a < 8; a++) {
+        if (a < param_normalized * 7 + 0.5)
+            setLedCorr(5, a, true);
+    }
+}
+
+float potNewParam(float delta, float parameter_value, float previous_pot_value) {
+    float skew_ratio = delta > 0.0f
+                           ? (1.001f - parameter_value) / (1.001f - pot_val_old)
+                           : (0.001f + parameter_value) / (0.001f + pot_val_old);
+    skew_ratio = constrain(skew_ratio, 0.1f, 10.0f);
+    float newparam = parameter_value + skew_ratio * delta;
+    newparam = constrain(newparam, 0.0f, 1.0f);
+    return newparam;
+}
+
+float potNormalizeParam(float param, float min_param, float max_param, float power) {
+    return pow((param - min_param) / (max_param - min_param), 1.0f / power);
+}
+
+float potCalculateParam(float param_normalized, float min_param, float max_param, float power) {
+    return min_param + pow(param_normalized, power) * (max_param - min_param);
+}
+
+void writeIntEEPROM(int address, int number) {
+    EEPROM.write(address, number >> 8);
+    EEPROM.write(address + 1, number & 0xFF);
+}
+int readIntEEPROM(int address) {
+    return (EEPROM.read(address) << 8) + EEPROM.read(address + 1);
 }
