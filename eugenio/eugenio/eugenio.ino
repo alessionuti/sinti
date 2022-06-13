@@ -146,6 +146,7 @@ void setup() {
     lc.setIntensity(0, BRIGHTNESS);
     lc.clearDisplay(0);
     sleep_status = false;
+    startupanim();
     wakeanim();
 }
 
@@ -171,14 +172,12 @@ void loop() {
     }
 
     // SAVE POT DATA
-
     if (mode != 3 && !pulse_duration_saved) {
         for (int i = 0; i < N_CHANNELS; i++) {
             writeIntEEPROM(i * 10 + 3, pulse_duration[i]);
         }
         pulse_duration_saved = true;
     }
-
     if (mode != 4 && !bpm_saved) {
         writeIntEEPROM(128, bpm_clock_int);
         bpm_saved = true;
@@ -226,8 +225,13 @@ void loop() {
     sw_val = analogRead(ENC_SWITCH);
     // SWITCH 1
     switchRead(0, sw_val);
-    if (sw_short_press[0]) {
+    if (sw_short_press[0] && clock_internal) {
         sw_short_press[0] = false;
+        mode = 4;
+        updateLedsMode4(potNormalizeParam(bpm_clock_int, MIN_BPM, MAX_BPM, CURVE_BPM));
+        }
+    if (sw_long_press[0]) {
+        sw_long_press[0] = false;
         clock_internal = !clock_internal;  // switch ENC1 = clock mode
         mode = 0;
     }
@@ -261,7 +265,7 @@ void loop() {
     }
 
     // READ POTENTIOMETER
-    pot_val = analogRead(POT) / 1023.0f;
+    pot_val = 1.0f - (analogRead(POT) / 1023.0f);
     float delta = pot_val - pot_val_old;
     if (fabs(delta) > 0.005f) {  // pot touched
         last_touched = time;
@@ -270,8 +274,7 @@ void loop() {
             float param = potNewParam(delta, potNormalizeParam(pulse_duration[ch_active], MIN_PULSE_DURATION, MAX_PULSE_DURATION, CURVE_PULSE_DURATION), pot_val_old);
             pulse_duration[ch_active] = potCalculateParam(param, MIN_PULSE_DURATION, MAX_PULSE_DURATION, CURVE_PULSE_DURATION);
             updateLedsMode3(param);
-        } else if (clock_internal) {
-            mode = 4;
+        } else if (mode == 4) {
             bpm_saved = false;
             float param = potNewParam(delta, potNormalizeParam(bpm_clock_int, MIN_BPM, MAX_BPM, CURVE_BPM), pot_val_old);
             bpm_clock_int = potCalculateParam(param, MIN_BPM, MAX_BPM, CURVE_BPM);
@@ -386,6 +389,62 @@ void switchRead(int n, int sw_value) {
             sw_short_press[n] = true;
         }
     }
+}
+
+void startupanim() {
+    // setRowCorr(0, B00000000);
+    // setRowCorr(1, B00001100);
+    // setRowCorr(2, B00010100);
+    // setRowCorr(3, B00100100);
+    // setRowCorr(4, B00100100);
+    // setRowCorr(5, B00010100);
+    // setRowCorr(6, B00001100);
+    // setRowCorr(7, B00000000);
+    // delay(100);
+    // lc.clearDisplay(0);
+    // delay(50);
+    // setRowCorr(0, B00000000);
+    // setRowCorr(1, B00010000);
+    // setRowCorr(2, B00001000);
+    // setRowCorr(3, B00001100);
+    // setRowCorr(4, B00110000);
+    // setRowCorr(5, B00010000);
+    // setRowCorr(6, B00001000);
+    // setRowCorr(7, B00000000);
+    // delay(100);
+    // lc.clearDisplay(0);
+    // delay(50);
+    // setRowCorr(0, B00000000);
+    // setRowCorr(1, B00011100);
+    // setRowCorr(2, B00100100);
+    // setRowCorr(3, B00010100);
+    // setRowCorr(4, B00010100);
+    // setRowCorr(5, B00100100);
+    // setRowCorr(6, B00011100);
+    // setRowCorr(7, B00000000);
+    // delay(100);
+    // lc.clearDisplay(0);
+    // delay(50);
+    // setRowCorr(0, B00000000);
+    // setRowCorr(1, B00011100);
+    // setRowCorr(2, B00100100);
+    // setRowCorr(3, B00010100);
+    // setRowCorr(4, B00001100);
+    // setRowCorr(5, B00010100);
+    // setRowCorr(6, B00100100);
+    // setRowCorr(7, B00000000);
+    // delay(100);
+    // lc.clearDisplay(0);
+    // delay(50);
+    // setRowCorr(0, B00000000);
+    // setRowCorr(1, B00011100);
+    // setRowCorr(2, B00100100);
+    // setRowCorr(3, B00010100);
+    // setRowCorr(4, B00001100);
+    // setRowCorr(5, B00010100);
+    // setRowCorr(6, B00100100);
+    // setRowCorr(7, B00000000);
+    delay(100);
 }
 
 void wakeanim() {
