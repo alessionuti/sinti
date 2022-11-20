@@ -1,7 +1,7 @@
 # Eugenio
 Euclidean Sequencer based on Arduino Nano
 
-Features (see manual/):
+Features (see `manual/`):
 - 4 channels
 - external/internal clock options
 - external clock divider/multiplier
@@ -11,12 +11,11 @@ Features (see manual/):
 
 ## Code
 
-2022-10-15
+2022-11-19
 
 Changes:
 - UI updates
-- clock divider/multiplier implemented
-- display out of sync bug fixed
+- clock divider/multiplier implemented (to be improved)
 
 
 ### Acknowledgements
