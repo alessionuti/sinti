@@ -5,7 +5,7 @@ Rob Spencer cc-by 4.0
 
 Version 2021-11-19 Alessio Nuti
 
-Features:
+Changes:
 - new quantization algorithm: quantize to the nearest active note
 - support for ADC calibration
 

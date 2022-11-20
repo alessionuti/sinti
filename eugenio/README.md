@@ -1,15 +1,23 @@
-# Eugenio Euclidean Rhythm Generator
+# Eugenio
+Euclidean Sequencer based on Arduino Nano
+
+Features (see manual/):
+- 4 channels
+- external/internal clock options
+- external clock divider/multiplier
+- trigger and gate output modes, with adjustable gate length for each channel
+- reset button and input
+
 
 ## Code
 
-2022-03-09 Alessio Nuti
+2022-10-15
 
-Features:
-- 4 channels
-- 3 encoders (1 = length, 2 = hits, 3 = offset)
-- 3 encoder switches (1 = external/internal clock, 2 = channel selection (hold for display sleep mode), 3 = modify pulse length)
-- UI with scrolling display (1 line per channel), and a common area for displaying active changes
-- multifunction potentiometer for adjusting output pulse length for every channel and tempo in internal clock mode 
+Changes:
+- UI updates
+- clock divider/multiplier implemented
+- display out of sync bug fixed
+
 
 ### Acknowledgements
 - [Tombola](https://modwiggler.com/forum/viewtopic.php?t=45485)'s Euclidean Polyrhythm Generator
@@ -18,6 +26,6 @@ Features:
 
 ## Hardware
 
-Notes:
+Changes:
 - added 10uF decoupling capacitor to LED matrix power input
-- Rset value increased to 470 kOhm in order to reduce LED current and induced noise (the MAX7221 would be better)
+- Rset value increased to 470 kOhm in order to reduce LED current and induced noise

@@ -3,7 +3,7 @@
 
 /*
 Eugenio Euclidean Sequencer
-2022-10-15 Alessio Nuti
+2022-11-19 Alessio Nuti
 Rev. E
 */
 
@@ -69,7 +69,10 @@ volatile bool sync_int = false;
 volatile bool out_gate = false;
 volatile bool reset = false;
 volatile bool clock = false;
+volatile bool sync = false;
 int bpm_clock_int;
+float divider = 0.5f;
+float interval = 1000.0f;
 int ch_edit = 0;  // current channel, zero indexed
 int mode = 0;     // display mode
 // 0 = normal
@@ -78,7 +81,9 @@ int mode = 0;     // display mode
 // 3 = gate length
 // 4 = int clock tempo
 // 5 = clock divider/mult
+bool sequence_saved = true;
 bool bpm_saved = true;
+bool div_saved = true;
 bool pulse_duration_saved = true;
 byte master_clock = 0;
 byte n_length[N_CHANNELS];   // length of the sequence
@@ -90,7 +95,8 @@ bool sequence[N_CHANNELS][MAX_LENGTH];
 bool pulse_active[N_CHANNELS];
 int pulse_duration[N_CHANNELS];
 unsigned long last_pulse[N_CHANNELS];
-
+unsigned long last_sync = 0;
+unsigned long lastlast_sync = 0;
 
 void setup() {
   pinMode(ENC_1A, INPUT_PULLUP);
@@ -126,6 +132,7 @@ void setup() {
     EEPROM.write(32, 0);     // 4o
     writeIntEEPROM(33, 10);  // pulse length
 
+    EEPROM.write(127, 8);     // div_int
     writeIntEEPROM(128, 80);  // bpm
 
     EEPROM.write(255, 127);  // two values to check if EEPROM has been initialized correctly
@@ -143,6 +150,7 @@ void setup() {
     last_pulse[i] = 0;
   }
   updateSequence();
+  divider = (((float)EEPROM.read(127)) + 0.5f) / 16.0f;
   bpm_clock_int = readIntEEPROM(128);
 
   // set up Arduino interrupts
@@ -181,7 +189,17 @@ void loop() {
     setRowCorr(6, 0);
   }
 
-  // SAVE POT DATA
+  // SAVE DATA TO EEPROM
+
+  if (mode != 1 && mode != 2 && !sequence_saved) {
+    for (int i = 0; i < N_CHANNELS; i++) {
+      EEPROM.write(ch_edit * 10, n_length[ch_edit]);
+      EEPROM.write(ch_edit * 10 + 1, k_hits[ch_edit]);
+      EEPROM.write(ch_edit * 10 + 2, o_offset[ch_edit]);
+    }
+    sequence_saved = true;
+  }
+
   if (mode != 3 && !pulse_duration_saved) {
     for (int i = 0; i < N_CHANNELS; i++) {
       writeIntEEPROM(i * 10 + 3, pulse_duration[i]);
@@ -192,6 +210,10 @@ void loop() {
     writeIntEEPROM(128, bpm_clock_int);
     bpm_saved = true;
   }
+  if (mode != 5 && !div_saved) {
+    EEPROM.write(127, (byte)(divider * 16 + 0.5f));
+    div_saved = true;
+  }
 
   // READ ENCODERS
   // ENCODER 1 (N)
@@ -199,8 +221,7 @@ void loop() {
   if (enc_reading[0] != 0 && time - last_enc > ENC_DEBOUNCE) {
     n_length[ch_edit] = constrain((int)n_length[ch_edit] + enc_reading[0], MIN_LENGTH, MAX_LENGTH);
     k_hits[ch_edit] = constrain((int)k_hits[ch_edit], 0, n_length[ch_edit]);
-    EEPROM.write(ch_edit * 10, n_length[ch_edit]);
-    EEPROM.write(ch_edit * 10 + 1, k_hits[ch_edit]);
+    sequence_saved = false;
     updateSequence();
     mode = 1;
     updateLedsMode1();
@@ -211,7 +232,7 @@ void loop() {
   enc_reading[1] = encoderRead(ENC_2A, ENC_2B);
   if (enc_reading[1] != 0 && time - last_enc > ENC_DEBOUNCE) {
     k_hits[ch_edit] = constrain((int)k_hits[ch_edit] + enc_reading[1], 0, n_length[ch_edit]);  // update with encoder reading
-    EEPROM.write(ch_edit * 10 + 1, k_hits[ch_edit]);
+    sequence_saved = false;
     updateSequence();
     mode = 2;
     updateLedsMode2();
@@ -223,7 +244,7 @@ void loop() {
   if (enc_reading[2] != 0 && time - last_enc > ENC_DEBOUNCE) {
     o_offset[ch_edit] += (enc_reading[2] + n_length[ch_edit]);
     o_offset[ch_edit] %= n_length[ch_edit];  // update with encoder reading
-    EEPROM.write(ch_edit * 10 + 2, o_offset[ch_edit]);
+    sequence_saved = false;
     updateSequence();
     mode = 2;
     updateLedsMode2();
@@ -237,23 +258,29 @@ void loop() {
   switchRead(0, sw_val);
   if (sw_short_press[0]) {
     if (sync_int) {
+      // TEMPO
       sw_short_press[0] = false;
       mode = 4;
       updateLedsMode34(potNormalizeParam(bpm_clock_int, MIN_BPM, MAX_BPM, CURVE_BPM));
     } else {
-      //TODO clock divider
+      // CLOCK DIV/MULT
+      sw_short_press[0] = false;
+      mode = 5;
+      updateLedsMode5(divider);
     }
   }
   if (sw_long_press[0]) {
     sw_long_press[0] = false;
-    sync_int = !sync_int;  // switch long ENC1 = clock mode
+    // SYNC MODE
+    sync_int = !sync_int;
     mode = 0;
   }
   // SWITCH 2
   switchRead(1, sw_val);
   if (sw_short_press[1]) {
     sw_short_press[1] = false;
-    ch_edit = (ch_edit + 1) % N_CHANNELS;  // switch ENC2 = current channel
+    // CHANNEL EDIT
+    ch_edit = (ch_edit + 1) % N_CHANNELS;
     switch (mode) {
       case 1:
         updateLedsMode1();
@@ -263,23 +290,25 @@ void loop() {
         break;
       case 3:
         updateLedsMode34(potNormalizeParam(pulse_duration[ch_edit], MIN_PULSE_DURATION, MAX_PULSE_DURATION, CURVE_PULSE_DURATION));
-        // TBR
         break;
     }
   }
   if (sw_long_press[1]) {
     sw_long_press[1] = false;
+    // SLEEP
     sleep_command = !sleep_command;
   }
   // SWITCH 3
   switchRead(2, sw_val);
   if (sw_short_press[2] && out_gate) {
     sw_short_press[2] = false;
+    // GATE LENGTH
     mode = 3;
     updateLedsMode34(potNormalizeParam(pulse_duration[ch_edit], MIN_PULSE_DURATION, MAX_PULSE_DURATION, CURVE_PULSE_DURATION));
   }
   if (sw_long_press[2]) {
     sw_long_press[2] = false;
+    // GATE/TRG MODE
     out_gate = !out_gate;
   }
 
@@ -298,13 +327,31 @@ void loop() {
       float param = potNewParam(delta, potNormalizeParam(bpm_clock_int, MIN_BPM, MAX_BPM, CURVE_BPM), pot_val_old);
       bpm_clock_int = potCalculateParam(param, MIN_BPM, MAX_BPM, CURVE_BPM);
       updateLedsMode34(param);
+    } else if (mode == 5) {
+      div_saved = false;
+      divider = potNewParam(delta, divider, pot_val_old);
+      updateLedsMode5(divider);
     }
     pot_val_old = pot_val;
   }
 
-  // INTERNAL CLOCK
-  if (sync_int && time - last_clock > 60.0f / bpm_clock_int * 1000) {
-    clock = true;
+  // SYNC MANAGEMENT
+  if (sync_int) {  // INTERNAL CLOCK
+    if (time - last_clock > 60.0f / bpm_clock_int * 1000) {
+      clock = true;
+    }
+  } else {  // EXTERNAL CLOCK
+    if (sync) {
+      sync = false;
+      interval = ((last_sync - lastlast_sync) + (time - last_sync)) * 0.5f;
+      lastlast_sync = last_sync;
+      last_sync = time;
+      if (divCalculate(divider) == 1) clock = true;
+    }
+    if (divCalculate(divider) != 1 && last_sync != 0 && time - last_clock > interval * divCalculate(divider)) {
+      // CLOCK DIV/MULT
+      clock = true;
+    }
   }
 
   // CLOCK ADVANCE ROUTINE
@@ -333,8 +380,6 @@ void loop() {
         digitalWrite(OUT_PINS[i], HIGH);
         pulse_active[i] = true;
         last_pulse[i] = time;
-        // } else {
-        // digitalWrite(OUT_PINS[i], LOW);
       }
     }
     last_clock = time;
@@ -342,7 +387,7 @@ void loop() {
 
   // FINISH PULSES
   for (int i = 0; i < N_CHANNELS; i++) {
-    if (time - last_pulse[i] > pulse_duration[i] && pulse_active[i] == true) {
+    if (((!out_gate && time - last_pulse[i] > MIN_PULSE_DURATION) || (out_gate && time - last_pulse[i] > pulse_duration[i])) && pulse_active[i] == true) {
       digitalWrite(OUT_PINS[i], LOW);
       pulse_active[i] = false;
     }
@@ -353,9 +398,9 @@ void loop() {
 
 int encoderRead(int apin, int bpin) {
   /* function to read encoders at the designated pins
-     returns +1, 0 or -1 dependent on direction f
-     Contains no internal debounce, so calls should be delayed
-     */
+         returns +1, 0 or -1 dependent on direction f
+         Contains no internal debounce, so calls should be delayed
+         */
   bool diga = digitalRead(apin);
   bool digb = digitalRead(bpin);
   int result = 0;
@@ -411,59 +456,61 @@ void switchRead(int n, int sw_value) {
 }
 
 void startupanim() {
-  // setRowCorr(0, B00000000);
-  // setRowCorr(1, B00001100);
-  // setRowCorr(2, B00010100);
-  // setRowCorr(3, B00100100);
-  // setRowCorr(4, B00100100);
-  // setRowCorr(5, B00010100);
-  // setRowCorr(6, B00001100);
-  // setRowCorr(7, B00000000);
-  // delay(100);
-  // lc.clearDisplay(0);
-  // delay(50);
-  // setRowCorr(0, B00000000);
-  // setRowCorr(1, B00010000);
-  // setRowCorr(2, B00001000);
-  // setRowCorr(3, B00001100);
-  // setRowCorr(4, B00110000);
-  // setRowCorr(5, B00010000);
-  // setRowCorr(6, B00001000);
-  // setRowCorr(7, B00000000);
-  // delay(100);
-  // lc.clearDisplay(0);
-  // delay(50);
-  // setRowCorr(0, B00000000);
-  // setRowCorr(1, B00011100);
-  // setRowCorr(2, B00100100);
-  // setRowCorr(3, B00010100);
-  // setRowCorr(4, B00010100);
-  // setRowCorr(5, B00100100);
-  // setRowCorr(6, B00011100);
-  // setRowCorr(7, B00000000);
-  // delay(100);
-  // lc.clearDisplay(0);
-  // delay(50);
-  // setRowCorr(0, B00000000);
-  // setRowCorr(1, B00011100);
-  // setRowCorr(2, B00100100);
-  // setRowCorr(3, B00010100);
-  // setRowCorr(4, B00001100);
-  // setRowCorr(5, B00010100);
-  // setRowCorr(6, B00100100);
-  // setRowCorr(7, B00000000);
-  // delay(100);
-  // lc.clearDisplay(0);
-  // delay(50);
-  // setRowCorr(0, B00000000);
-  // setRowCorr(1, B00011100);
-  // setRowCorr(2, B00100100);
-  // setRowCorr(3, B00010100);
-  // setRowCorr(4, B00001100);
-  // setRowCorr(5, B00010100);
-  // setRowCorr(6, B00100100);
-  // setRowCorr(7, B00000000);
-  delay(100);
+  int delay1 = 80;
+  int delay2 = 40;
+  setRowCorr(0, B00000000);
+  setRowCorr(1, B00001100);
+  setRowCorr(2, B00010100);
+  setRowCorr(3, B00100100);
+  setRowCorr(4, B00100100);
+  setRowCorr(5, B00010100);
+  setRowCorr(6, B00001100);
+  setRowCorr(7, B00000000);
+  delay(delay1);
+  lc.clearDisplay(0);
+  delay(delay2);
+  setRowCorr(0, B00000000);
+  setRowCorr(1, B00010000);
+  setRowCorr(2, B00001000);
+  setRowCorr(3, B00001100);
+  setRowCorr(4, B00110000);
+  setRowCorr(5, B00010000);
+  setRowCorr(6, B00001000);
+  setRowCorr(7, B00000000);
+  delay(delay1);
+  lc.clearDisplay(0);
+  delay(delay2);
+  setRowCorr(0, B00000000);
+  setRowCorr(1, B00011100);
+  setRowCorr(2, B00100100);
+  setRowCorr(3, B00010100);
+  setRowCorr(4, B00010100);
+  setRowCorr(5, B00100100);
+  setRowCorr(6, B00011100);
+  setRowCorr(7, B00000000);
+  delay(delay1);
+  lc.clearDisplay(0);
+  delay(delay2);
+  setRowCorr(0, B00000000);
+  setRowCorr(1, B00011100);
+  setRowCorr(2, B00100100);
+  setRowCorr(3, B00010100);
+  setRowCorr(4, B00001100);
+  setRowCorr(5, B00010100);
+  setRowCorr(6, B00100100);
+  setRowCorr(7, B00000000);
+  delay(delay1);
+  lc.clearDisplay(0);
+  delay(delay2);
+  setRowCorr(0, B00000000);
+  setRowCorr(1, B00011100);
+  setRowCorr(2, B00100100);
+  setRowCorr(3, B00010100);
+  setRowCorr(4, B00001100);
+  setRowCorr(5, B00010100);
+  setRowCorr(6, B00100100);
+  setRowCorr(7, B00000000);
+  delay(delay1);
 }
 
 void wakeanim() {
@@ -509,7 +556,7 @@ void updateSequence() {
 
 void clock_isr() {
   if (!sync_int)
-    clock = true;
+    sync = true;
 }
 
 void reset_isr() {
@@ -595,11 +642,33 @@ void updateLedsMode2() {
 void updateLedsMode34(float param_normalized) {
   setRowCorr(5, 0);
   for (int a = 0; a < 8; a++) {
-    if (a < param_normalized * 7 + 0.5)
+    if (a < param_normalized * 7 + 0.5f)
       setLedCorr(5, a, true);
   }
 }
 
+void updateLedsMode5(float div_normalized) {
+  setRowCorr(5, 0);
+  setRowCorr(6, 0);
+  int div_int = div_normalized * 16 + 0.5f;
+  if (div_int < 7 && div_int >= 0) {
+    // DIVIDER
+    for (int a = 0; a < 8; a++) {
+      if (a >= div_int)
+        setLedCorr(5, a, true);
+    }
+  } else if (div_int > 8 && div_int <= 16) {
+    // MULTIPLIER
+    for (int a = 0; a < 8; a++) {
+      if (a <= div_int - 8)
+        setLedCorr(6, a, true);
+    }
+  } else {
+    // OFF
+    setLedCorr(5, 7, true);
+    setLedCorr(6, 0, true);
+  }
+}
 
 float potNewParam(float delta, float parameter_value, float previous_pot_value) {
   float skew_ratio = delta > 0.0f
@@ -625,4 +694,18 @@ void writeIntEEPROM(int address, int number) {
 }
 int readIntEEPROM(int address) {
   return (EEPROM.read(address) << 8) + EEPROM.read(address + 1);
+}
+
+float divCalculate(float div_normalized) {
+  int div_int = div_normalized * 16 + 0.5f;
+  if (div_int < 7 && div_int >= 0) {
+    // DIVIDER
+    return (8 - div_int);
+  } else if (div_int > 8 && div_int <= 16) {
+    // MULTIPLIER
+    return 1.0f / (div_int - 7.0f);
+  } else {
+    // OFF
+    return 1;
+  }
 }
