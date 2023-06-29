@@ -2,9 +2,9 @@
 #include <LedControl.h>
 
 /*
-Eugenio Euclidean Sequencer
-2022-11-19 Alessio Nuti
-Rev. E
+Eugenio
+Euclidean Sequencer
+Version 2.0 - 2022-11-19 Alessio Nuti
 */
 
 #define ENC_1A 6  // n / length
@@ -688,12 +688,19 @@ float potCalculateParam(float param_normalized, float min_param, float max_param
   return min_param + pow(param_normalized, power) * (max_param - min_param);
 }
 
-void writeIntEEPROM(int address, int number) {
-  EEPROM.write(address, number >> 8);
-  EEPROM.write(address + 1, number & 0xFF);
+void writeIntEEPROM(int address, int number)
+{ 
+  byte byte1 = number >> 8;
+  byte byte2 = number & 0xFF;
+  EEPROM.write(address, byte1);
+  EEPROM.write(address + 1, byte2);
 }
-int readIntEEPROM(int address) {
-  return (EEPROM.read(address) << 8) + EEPROM.read(address + 1);
+
+int readIntEEPROM(int address)
+{
+  byte byte1 = EEPROM.read(address);
+  byte byte2 = EEPROM.read(address + 1);
+  return (byte1 << 8) + byte2;
 }
 
 float divCalculate(float div_normalized) {

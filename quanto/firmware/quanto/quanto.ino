@@ -2,10 +2,10 @@
 #include <SPI.h>
 
 /*
-Quanti CV Quantizer
-2023-06-17 A. Nuti
-Veersion 4.0 
-Rob Spencer cc-by 4.0
+Quanti
+CV Quantizer
+Version 4.0 - 2023-06-17 Alessio Nuti 
+based on pureQuantiser - Rob Spencer cc-by 4.0
 */
 
 #define LR_0 A3
@@ -33,41 +33,38 @@ Rob Spencer cc-by 4.0
 #define NOTE_VALUE 0.0833333333F  // 1oct/12
 #define TRIG_PULSE 10             // ms
 
-#define SWITCH_DEBOUNCE 300         // ms
-#define SWITCH_SHORT_PRESS_TIME 10  // ms
-#define SWITCH_LONG_PRESS_TIME 500  // ms
+#define SWITCH_DEBOUNCE 300          // ms
+#define SWITCH_SHORT_PRESS_TIME 10   // ms
+#define SWITCH_LONG_PRESS_TIME 3000  // ms
 #define SWITCH_THRESHOLD 300
 
-unsigned long time = 0;
-float ADC_MIN = 0.9;
-float ADC_MAX = 4092.4;
-byte octTranspose = 5;  // transpose DOWN
-
-//Setup variable for the notes
-bool notes[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-
-//Setup program control variables
 byte mode = 0;  // 0=bypass 1=quantize 2=ADCcalibration 3=DACcalibration
+unsigned long time = 0;
+float ADC_MIN = 0;
+float ADC_MAX = 4095;
+byte octTranspose = 5;  // transpose DOWN
+bool notes[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 int i = 0;
-
 float cvIn;   // from 0 to RANGE_IN
 float cvOut;  // from 0 to RANGE_OUT
 float lastCvOut;
 unsigned long lastCvChangeTime;
 
-//Setup switch debounce variables
+// Setup switch variables
 unsigned long lastDebounceTime = 0;
 bool sw_0;
 bool sw_1;
+int adc_0v;
+int adc_5v;
 unsigned long last_sw_pressed[2] = { 0, 0 };
 unsigned long last_sw_released[2] = { 0, 0 };
 bool sw_pressed[2] = { false, false };
 bool sw_holded[2] = { false, false };
 bool sw_short_press[2] = { false, false };
 bool sw_long_press[2] = { false, false };
+bool mode_2_flag = false;
 
 void setup() {
-  //Setup LED Pins
   pinMode(LR_0, OUTPUT);
   pinMode(LR_1, OUTPUT);
   pinMode(LR_2, OUTPUT);
@@ -75,7 +72,6 @@ void setup() {
   pinMode(LC_0, OUTPUT);
   pinMode(LC_1, OUTPUT);
   pinMode(LC_2, OUTPUT);
-
   digitalWrite(LR_0, HIGH);
   digitalWrite(LR_1, HIGH);
   digitalWrite(LR_2, HIGH);
@@ -84,7 +80,6 @@ void setup() {
   digitalWrite(LC_1, LOW);
   digitalWrite(LC_2, LOW);
 
-  //Setup Button Pins
   pinMode(BC_0, OUTPUT);
   pinMode(BC_1, OUTPUT);
   pinMode(BC_2, OUTPUT);
@@ -94,50 +89,64 @@ void setup() {
   pinMode(BR_3, INPUT);
   pinMode(SW_0, INPUT);
   pinMode(SW_1, INPUT);
-
   digitalWrite(BC_0, LOW);
   digitalWrite(BC_1, LOW);
   digitalWrite(BC_2, LOW);
 
-  //Setup SPI Chip Select Pins
   pinMode(CS_ADC, OUTPUT);
   pinMode(CS_DAC, OUTPUT);
-
   digitalWrite(CS_ADC, HIGH);
   digitalWrite(CS_DAC, HIGH);
   SPI.begin();
 
-  //Setup Trigger Pin
   pinMode(TRIG, OUTPUT);
   digitalWrite(TRIG, LOW);
 
-  //Read last saved notes from EEPROM
+  // Read saved notes from EEPROM
   for (int k = 0; k < 12; k++) {
-    if (EEPROM.read(k) == 255) {
-      notes[k] = 0;
-    } else {
+    if (EEPROM.read(k) != 255) {
       notes[k] = EEPROM.read(k);
     }
   }
-  if (EEPROM.read(100) == 255) {
-    octTranspose = 5;  // default transpose (output voltage corresponding to input)
-  } else {
+  if (EEPROM.read(100) != 255) {
     int octTransposeStored = EEPROM.read(100);
     octTranspose = constrain(octTransposeStored, 0, 10);
+  }
+  if (EEPROM.read(110) != 255 && EEPROM.read(120) != 255) {
+    ADC_MIN = readIntEEPROM(110);
+    ADC_MAX = readIntEEPROM(120);
   }
 }
 
 void loop() {
   time = millis();
 
-  // 1) Mode management
   // SWITCH 0
   switchRead(0, analogRead(SW_0));
   if (sw_short_press[0]) {
     sw_short_press[0] = false;
-    octTranspose += 1;
-    octTranspose = constrain(octTranspose, 0, 10);
-    EEPROM.write(100, octTranspose);
+    if (mode == 0 || mode == 1) {
+      octTranspose += 1;
+      octTranspose = constrain(octTranspose, 0, 10);
+      EEPROM.write(100, octTranspose);
+    } else if (mode == 2) {
+      if (!mode_2_flag) {
+        int adc_5v = adcAvg(100);  // 5 V
+        mode_2_flag = true;
+      } else {
+        int adc_0v = adcAvg(100);  // 0 V
+        ADC_MIN = 2*adc_5v - adc_0v;
+        ADC_MAX = 2*adc_0v - adc_5v;
+        ADC_MIN = constrain(ADC_MIN, 0, 4095);
+        ADC_MAX = constrain(ADC_MAX, 0, 4095);
+        // store adc calibration
+        writeIntEEPROM(110, ADC_MIN);
+        writeIntEEPROM(120, ADC_MAX);
+        // exit mode 2
+        mode_2_flag = false;
+        mode = 0;
+      }
+    }
   }
   if (sw_long_press[0]) {
     sw_long_press[0] = false;
@@ -148,35 +157,35 @@ void loop() {
   switchRead(1, analogRead(SW_1));
   if (sw_short_press[1]) {
     sw_short_press[1] = false;
-    if (octTranspose > 0) octTranspose -= 1;
-    octTranspose = constrain(octTranspose, 0, 10);
-    EEPROM.write(100, octTranspose);
+    if (mode == 0 || mode == 1) {
+      if (octTranspose > 0) octTranspose -= 1;
+      octTranspose = constrain(octTranspose, 0, 10);
+      EEPROM.write(100, octTranspose);
+    } else if (mode == 3) mode = 0;
   }
   if (sw_long_press[1]) {
     sw_long_press[1] = false;
     if (mode == 3) mode = 0;
     else mode = 3;
   }
-  // Check all the note flags and if none are set, we're not quantising, mode=0
-  int notes_active = 0;
-  for (int j = 0; j < 12; j++) {
-    notes_active = (notes_active + (int)notes[j]);
-  }
+
   if (mode == 0 || mode == 1) {
+    // Check all the note flags and if none are set, we're not quantising, mode=0
+    int notes_active = 0;
+    for (int j = 0; j < 12; j++) {
+      notes_active = (notes_active + (int)notes[j]);
+    }
     if (notes_active == 0) mode = 0;
-    else mode = 1;
+    else {
+      mode = 1;
+      if (notes[i]) writeLED(i);
+      else writeLED(-1);
+    }
   }
 
   // 2) Button Management
-  if (mode == 1) {
-    if (notes[i] == 1) {
-      writeLED(i);
-    } else {
-      writeLED(-1);
-    }
-  }
   readNoteButton(i);
-  //Increment the counter so on the next loop we'll read the next button.
+  // Increment the counter so on the next loop we'll read the next button.
   if (i > 11) {
     i = 0;
   } else {
@@ -184,8 +193,8 @@ void loop() {
   }
 
   // 3) CV Management
-  //Read CV In
-  cvIn = adc2Cv(adcRead(0));
+  // Read CV In
+  cvIn = adc2Cv(adcAvg(10));
   if (mode == 1) {
     // Quantize
     cvOut = quantizeCV(cvIn);
@@ -200,10 +209,13 @@ void loop() {
       digitalWrite(TRIG, LOW);
     }
   } else if (mode == 2) {
+    digitalWrite(TRIG, LOW);
     // Transpose and clamp output
     cvOut = constrain(cvIn - 5, 0, RANGE_OUT);
-    blinkLed(0);
+    if (mode_2_flag) blinkLed(11);
+    else blinkLed(0);
   } else if (mode == 3) {
+    digitalWrite(TRIG, LOW);
     if (notes[0]) {
       cvOut = RANGE_OUT;
       writeLED(0);
@@ -215,7 +227,8 @@ void loop() {
       writeLED(11);
     }
   } else {
-    // Just output the input and flash the leds like a VU Meter.
+    digitalWrite(TRIG, LOW);
+    // Light the leds like a VU Meter.
     vuMeter(cvIn);
     // Transpose and clamp output
     cvOut = constrain(cvIn - octTranspose, 0, RANGE_OUT);
@@ -227,20 +240,18 @@ void loop() {
 float quantizeCV(float cvInput) {
   int octave = floor(cvInput);
   float noteFloat = (cvInput - octave) / NOTE_VALUE;
-  int note = round(noteFloat);  // valore da 0 a 11
+  int note = round(noteFloat);  // 0 to 11
   int sign = 1;
-  if (noteFloat < note) {
-    sign = -1;
-  }
+  if (noteFloat < note) sign = -1;
   // Quantize
   float cvOutput = 0;
-  for (int i = 0; i < 12; i++) {
-    cvOutput = octave + (note + sign * i) * NOTE_VALUE;
-    if (cvOutput >= 0 && cvOutput <= 4095 && notes[(note + sign * i + 12) % 12]) {
+  for (int m = 0; m < 12; m++) {
+    cvOutput = octave + (note + sign * m) * NOTE_VALUE;
+    if (cvOutput >= 0 && cvOutput <= 4095 && notes[(note + sign * m + 12) % 12]) {
       break;
     }
-    cvOutput = octave + (note - sign * i) * NOTE_VALUE;
-    if (cvOutput >= 0 && cvOutput <= 4095 && notes[(note - sign * i + 12) % 12]) {
+    cvOutput = octave + (note - sign * m) * NOTE_VALUE;
+    if (cvOutput >= 0 && cvOutput <= 4095 && notes[(note - sign * m + 12) % 12]) {
       break;
     }
   }
@@ -251,7 +262,8 @@ void vuMeter(int cv) {
   for (int l = 0; l < 12; l++) {
     if (cv > (RANGE_IN / 13 * (l + 1))) {
       writeLED(11 - l);
-    } else writeLED(-1);
+      writeLED(-1);
+    } 
   }
 }
 
@@ -280,6 +292,12 @@ int adcRead(byte channel) {
   return (b1 >> 3);     // To have a 12bit answer (see datasheet)
 }
 
+int adcAvg(int points) {
+  long adc_sum = 0;
+  for (int k = 0; k < points; k++) adc_sum += adcRead(0);
+  return adc_sum / points;
+}
+
 void switchRead(int n, int sw_value) {
   if (sw_value > SWITCH_THRESHOLD && time - last_sw_pressed[n] > SWITCH_DEBOUNCE && time - last_sw_released[n] > SWITCH_DEBOUNCE) {
     if (!sw_pressed[n]) {
@@ -303,15 +321,28 @@ void switchRead(int n, int sw_value) {
   }
 }
 
-float adc2Cv(float x) {
-  // map ADC counts (ADC_MIN-ADC_MAX) to cv (0-RANGE_IN)
+float adc2Cv(int x) {
+  // map ADC counts (ADC_MIN-ADC_MAX) to cv (RANGE_IN-0)
   float y = constrain(x, ADC_MIN, ADC_MAX);
-  return (y - ADC_MIN) * RANGE_IN / (ADC_MAX - ADC_MIN);
+  return (ADC_MAX - y) * RANGE_IN / (ADC_MAX - ADC_MIN);
 }
 
-float cv2Dac(float x) {
+int cv2Dac(float x) {
   // map cv (0-RANGE_OUT) to DAC counts (0-4095)
   return round(x * 4095.0F / RANGE_OUT);
+}
+
+void writeIntEEPROM(int address, int number) {
+  byte byte1 = number >> 8;
+  byte byte2 = number & 0xFF;
+  EEPROM.write(address, byte1);
+  EEPROM.write(address + 1, byte2);
+}
+
+int readIntEEPROM(int address) {
+  byte byte1 = EEPROM.read(address);
+  byte byte2 = EEPROM.read(address + 1);
+  return (byte1 << 8) + byte2;
 }
 
 void readNoteButton(int button) {
@@ -379,7 +410,7 @@ void readNoteButton(int button) {
       break;
   }
 
-  //Debounce and toggle
+  // Debounce and toggle
   if ((time - lastDebounceTime) > SWITCH_DEBOUNCE) {
     if (buttonState == HIGH) {
       notes[button] = !notes[button];
@@ -391,7 +422,7 @@ void readNoteButton(int button) {
 
 void writeLED(int led) {
   switch (led) {
-    case -1:  // NO LEDS
+    case -1:  // no LEDs
       digitalWrite(LR_0, HIGH);
       digitalWrite(LR_1, HIGH);
       digitalWrite(LR_2, HIGH);

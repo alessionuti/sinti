@@ -1,5 +1,5 @@
 Eurorack modules
 
 * Eugenio: Euclidean sequencer
-* Quantizer: CV quantizer
-* Envelope/Trapezoid: Digital ADSR envelope and trapezoid generator
+* Quanto: CV quantizer
+* Adsrt: Digital ADSR envelope and trapezoid generator
