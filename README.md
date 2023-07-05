@@ -1,5 +1,6 @@
 Eurorack modules
 
+* Adsrt: Digital ADSR envelope and trapezoid generator
 * Eugenio: Euclidean sequencer
 * Quanto: CV quantizer
-* Adsrt: Digital ADSR envelope and trapezoid generator
+* Teremino: Eurorack version of the OpenTheremin V4

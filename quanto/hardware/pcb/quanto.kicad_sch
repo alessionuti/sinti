@@ -5,7 +5,7 @@
   (paper "A3" portrait)
 
   (title_block
-    (title "Quanto")
+    (title "Quanto - CV Quantizer")
     (date "2023-06-19")
     (rev "4.0")
   )

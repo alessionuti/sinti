@@ -2,8 +2,7 @@
 #include <SPI.h>
 
 /*
-Quanti
-CV Quantizer
+Quanto - CV Quantizer
 Version 4.0 - 2023-06-17 Alessio Nuti 
 based on pureQuantiser - Rob Spencer cc-by 4.0
 */

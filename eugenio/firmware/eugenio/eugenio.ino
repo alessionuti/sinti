@@ -2,8 +2,7 @@
 #include <LedControl.h>
 
 /*
-Eugenio
-Euclidean Sequencer
+Eugenio - Euclidean Sequencer
 Version 2.0 - 2022-11-19 Alessio Nuti
 */
 
