@@ -1,6 +1,5 @@
 # Sinti
 ## Eurorack modules
-
 * Adsrt: Digital ADSR envelope and trapezoid generator
 * Eugenio: Euclidean sequencer
 * Quanto: CV quantizer

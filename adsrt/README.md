@@ -1,8 +1,9 @@
 # Adsrt
-### Digital ADSR envelope and trapezoid generator
+## Digital ADSR envelope and trapezoid generator
 
 ### Acknowledgements
 Based on GMSN Pure ADSR by [Rob Spencer](https://github.com/robgmsn).
+
 Improvements:
 - envelope now returns exactly to zero after release
 - A, D, R knobs are now linear with time and ranges are adjustable

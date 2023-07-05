@@ -1,5 +1,5 @@
 # Eugenio
-### Euclidean sequencer
+## Euclidean sequencer
 See `manual/` for full documentation.
 
 ### Acknowledgements

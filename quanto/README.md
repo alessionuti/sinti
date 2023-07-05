@@ -1,5 +1,5 @@
 # Quanto
-### CV quantizer
+## CV quantizer
 See `manual/` for full documentation.
 
 ### Acknowledgements
