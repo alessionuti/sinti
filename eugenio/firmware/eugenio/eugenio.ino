@@ -3,7 +3,7 @@
 
 /*
 Eugenio - Euclidean Sequencer
-Version 2.0 - 2022-11-19 Alessio Nuti
+Version 2.1 - 2024-09-18 Alessio Nuti
 */
 
 #define ENC_1A 6  // n / length
@@ -27,7 +27,7 @@ Version 2.0 - 2022-11-19 Alessio Nuti
 
 #define BRIGHTNESS 15               // max brightness ok when R = 470 ohm
 #define TIMEOUT_DISPLAY 4000        // ms
-#define ENC_DEBOUNCE 50             // ms
+#define ENC_DEBOUNCE 100             // ms
 #define SWITCH_DEBOUNCE 100         // ms
 #define SWITCH_SHORT_PRESS_TIME 10  // ms
 #define SWITCH_LONG_PRESS_TIME 500  // ms
@@ -46,8 +46,7 @@ Version 2.0 - 2022-11-19 Alessio Nuti
 LedControl lc = LedControl(LED_DIN, LED_CLK, LED_LOAD, 1);
 const byte OUT_PINS[N_CHANNELS] = { OUT_1, OUT_2, OUT_3, OUT_4 };
 const int SWITCH_THRESHOLD[4] = { 550, 350, 205, 120 };
-bool diga_old;  // for encoders
-bool digb_old;
+int enc_state_old[3] = { 0, 0, 0 };
 int enc_reading[3] = { 0, 0, 0 };
 float pot_val;
 float pot_val_old;
@@ -70,7 +69,9 @@ volatile bool reset = false;
 volatile bool clock = false;
 volatile bool sync = false;
 int bpm_clock_int;
-float divider = 0.5f;
+byte divider = 7;  // 0-6 divider, 7 unity, 8-14 multi
+float div_float = 7.0f;
+byte div_count = 0;
 float interval = 1000.0f;
 int ch_edit = 0;  // current channel, zero indexed
 int mode = 0;     // display mode
@@ -95,7 +96,6 @@ bool pulse_active[N_CHANNELS];
 int pulse_duration[N_CHANNELS];
 unsigned long last_pulse[N_CHANNELS];
 unsigned long last_sync = 0;
-unsigned long lastlast_sync = 0;
 
 void setup() {
   pinMode(ENC_1A, INPUT_PULLUP);
@@ -131,7 +131,9 @@ void setup() {
     EEPROM.write(32, 0);     // 4o
     writeIntEEPROM(33, 10);  // pulse length
 
-    EEPROM.write(127, 8);     // div_int
+
+    EEPROM.write(127, 8);  // div_int
+
     writeIntEEPROM(128, 80);  // bpm
 
     EEPROM.write(255, 127);  // two values to check if EEPROM has been initialized correctly
@@ -149,7 +151,7 @@ void setup() {
     last_pulse[i] = 0;
   }
   updateSequence();
-  divider = (((float)EEPROM.read(127)) + 0.5f) / 16.0f;
+  divider = EEPROM.read(127);
   bpm_clock_int = readIntEEPROM(128);
 
   // set up Arduino interrupts
@@ -189,7 +191,6 @@ void loop() {
   }
 
   // SAVE DATA TO EEPROM
-
   if (mode != 1 && mode != 2 && !sequence_saved) {
     for (int i = 0; i < N_CHANNELS; i++) {
       EEPROM.write(ch_edit * 10, n_length[ch_edit]);
@@ -210,13 +211,13 @@ void loop() {
     bpm_saved = true;
   }
   if (mode != 5 && !div_saved) {
-    EEPROM.write(127, (byte)(divider * 16 + 0.5f));
+    EEPROM.write(127, divider);
     div_saved = true;
   }
 
   // READ ENCODERS
   // ENCODER 1 (N)
-  enc_reading[0] = encoderRead(ENC_1A, ENC_1B);
+  enc_reading[0] = encoderRead(ENC_1A, ENC_1B, 0);
   if (enc_reading[0] != 0 && time - last_enc > ENC_DEBOUNCE) {
     n_length[ch_edit] = constrain((int)n_length[ch_edit] + enc_reading[0], MIN_LENGTH, MAX_LENGTH);
     k_hits[ch_edit] = constrain((int)k_hits[ch_edit], 0, n_length[ch_edit]);
@@ -228,7 +229,7 @@ void loop() {
     last_touched = last_enc;
   }
   // ENCODER 2 (K)
-  enc_reading[1] = encoderRead(ENC_2A, ENC_2B);
+  enc_reading[1] = encoderRead(ENC_2A, ENC_2B, 1);
   if (enc_reading[1] != 0 && time - last_enc > ENC_DEBOUNCE) {
     k_hits[ch_edit] = constrain((int)k_hits[ch_edit] + enc_reading[1], 0, n_length[ch_edit]);  // update with encoder reading
     sequence_saved = false;
@@ -239,7 +240,7 @@ void loop() {
     last_touched = last_enc;
   }
   // ENCODER 3 (O)
-  enc_reading[2] = encoderRead(ENC_3A, ENC_3B);
+  enc_reading[2] = encoderRead(ENC_3A, ENC_3B, 2);
   if (enc_reading[2] != 0 && time - last_enc > ENC_DEBOUNCE) {
     o_offset[ch_edit] += (enc_reading[2] + n_length[ch_edit]);
     o_offset[ch_edit] %= n_length[ch_edit];  // update with encoder reading
@@ -328,7 +329,9 @@ void loop() {
       updateLedsMode34(param);
     } else if (mode == 5) {
       div_saved = false;
-      divider = potNewParam(delta, divider, pot_val_old);
+      float param = potNewParam(delta, div_float / 14.0f, pot_val_old);
+      div_float = param * 14;
+      divider = div_float + 0.5f;
       updateLedsMode5(divider);
     }
     pot_val_old = pot_val;
@@ -342,13 +345,22 @@ void loop() {
   } else {  // EXTERNAL CLOCK
     if (sync) {
       sync = false;
-      interval = ((last_sync - lastlast_sync) + (time - last_sync)) * 0.5f;
-      lastlast_sync = last_sync;
+      interval = time - last_sync;
       last_sync = time;
-      if (divCalculate(divider) == 1) clock = true;
-    }
-    if (divCalculate(divider) != 1 && last_sync != 0 && time - last_clock > interval * divCalculate(divider)) {
-      // CLOCK DIV/MULT
+      if (divider <= 7) {
+        // CLOCK DIVIDER OR FOLLOWER
+        if (div_count >= 7 - divider) {
+          div_count = 0;
+          clock = true;
+        } else div_count++;
+      } else {
+        // CLOCK MULTIPLIER
+        div_count = 0;
+        clock = true;
+      }
+    } else if (divider > 7 && last_sync != 0 && time - last_clock >= interval / (divider - 6) && div_count < divider - 7) {
+      // CLOCK MULTIPLIER
+      div_count++;
       clock = true;
     }
   }
@@ -395,37 +407,47 @@ void loop() {
   updateLeds();
 }
 
-int encoderRead(int apin, int bpin) {
-  /* function to read encoders at the designated pins
-         returns +1, 0 or -1 dependent on direction f
-         Contains no internal debounce, so calls should be delayed
-         */
+int encoderRead(int apin, int bpin, int n_enc) {
+
+  // Read the current state of the encoder pins
   bool diga = digitalRead(apin);
   bool digb = digitalRead(bpin);
+
+  // Create a two-bit state from the two inputs
+  int currentState = (diga << 1) | digb;
+
   int result = 0;
-  if (diga == diga_old && digb == digb_old) {
-    result = 0;
-  } else if (diga == true && digb == false) {
-    result = 1;
-    diga_old = diga;
-    digb_old = digb;
-  } else if (diga == false && digb == true) {
-    result = -1;
-    diga_old = diga;
-    digb_old = digb;
-  } else if (diga == false && digb == false && diga_old == true && digb_old == false) {
-    result = 1;
-    diga_old = diga;
-    digb_old = digb;
-  } else if (diga == false && digb == false && diga_old == false && digb_old == true) {
-    result = -1;
-    diga_old = diga;
-    digb_old = digb;
-  } else if (diga == false && digb == false) {
-    result = 0;
-    diga_old = diga;
-    digb_old = digb;
+
+  // Check the transition between states
+  if (enc_state_old[n_enc] == 0b00) {
+    if (currentState == 0b01) {
+      result = 1;  // Moved forward
+    } else if (currentState == 0b10) {
+      result = -1;  // Moved backward
+    }
+  } else if (enc_state_old[n_enc] == 0b01) {
+    if (currentState == 0b11) {
+      result = 1;  // Moved forward
+    } else if (currentState == 0b00) {
+      result = -1;  // Moved backward
+    }
+  } else if (enc_state_old[n_enc] == 0b11) {
+    if (currentState == 0b10) {
+      result = 1;  // Moved forward
+    } else if (currentState == 0b01) {
+      result = -1;  // Moved backward
+    }
+  } else if (enc_state_old[n_enc] == 0b10) {
+    if (currentState == 0b00) {
+      result = 1;  // Moved forward
+    } else if (currentState == 0b11) {
+      result = -1;  // Moved backward
+    }
   }
+
+  // Update the previous state
+  enc_state_old[n_enc] = currentState;
+
   return result;
 }
 
@@ -646,20 +668,19 @@ void updateLedsMode34(float param_normalized) {
   }
 }
 
-void updateLedsMode5(float div_normalized) {
+void updateLedsMode5(byte div_int) {
   setRowCorr(5, 0);
   setRowCorr(6, 0);
-  int div_int = div_normalized * 16 + 0.5f;
   if (div_int < 7 && div_int >= 0) {
     // DIVIDER
     for (int a = 0; a < 8; a++) {
       if (a >= div_int)
         setLedCorr(5, a, true);
     }
-  } else if (div_int > 8 && div_int <= 16) {
+  } else if (div_int > 7 && div_int <= 14) {
     // MULTIPLIER
     for (int a = 0; a < 8; a++) {
-      if (a <= div_int - 8)
+      if (a <= div_int - 7)
         setLedCorr(6, a, true);
     }
   } else {
@@ -687,31 +708,15 @@ float potCalculateParam(float param_normalized, float min_param, float max_param
   return min_param + pow(param_normalized, power) * (max_param - min_param);
 }
 
-void writeIntEEPROM(int address, int number)
-{ 
+void writeIntEEPROM(int address, int number) {
   byte byte1 = number >> 8;
   byte byte2 = number & 0xFF;
   EEPROM.write(address, byte1);
   EEPROM.write(address + 1, byte2);
 }
 
-int readIntEEPROM(int address)
-{
+int readIntEEPROM(int address) {
   byte byte1 = EEPROM.read(address);
   byte byte2 = EEPROM.read(address + 1);
   return (byte1 << 8) + byte2;
-}
-
-float divCalculate(float div_normalized) {
-  int div_int = div_normalized * 16 + 0.5f;
-  if (div_int < 7 && div_int >= 0) {
-    // DIVIDER
-    return (8 - div_int);
-  } else if (div_int > 8 && div_int <= 16) {
-    // MULTIPLIER
-    return 1.0f / (div_int - 7.0f);
-  } else {
-    // OFF
-    return 1;
-  }
 }
